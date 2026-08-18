@@ -554,7 +554,6 @@
           <span id="connText">Conectando...</span>
         </div>
         <button class="btn" onclick="refreshData()">🔄 Actualizar</button>
-        <button class="btn btn-primary" onclick="showSettings()">⚙️ Config</button>
       </div>
     </header>
 
@@ -708,8 +707,8 @@
 
     function initSupabase() {
       if (typeof supabaseLib === 'undefined' || SUPABASE_URL.includes('%VITE_')) {
-        showToast('⚠️ Configura tus credenciales de Supabase', 'warning');
-        updateConnectionStatus(false, 'Sin configurar');
+        console.error('Supabase no configurado: faltan VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY en el build');
+        updateConnectionStatus(false, 'Sin conexión');
         return;
       }
       supabase = supabaseLib.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -1113,10 +1112,6 @@
         toast.style.transform = 'translateX(100%)';
         setTimeout(() => toast.remove(), 300);
       }, 4000);
-    }
-
-    function showSettings() {
-      showToast('⚙️ Configuración: Edita SUPABASE_URL y SUPABASE_KEY en el código', 'info');
     }
   </script>
 </body>

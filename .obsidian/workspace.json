@@ -300,6 +300,7 @@
   },
   "active": "ade78b5845c8ff0e",
   "lastOpenFiles": [
+    "dashboard/vite.config.ts.timestamp-1787075062413-54b788ed9246e.mjs",
     "dashboard/dist/index.html",
     "dashboard/dist",
     "dashboard/vite.config.ts.timestamp-1787073022102-b88b61fde65c5.mjs",
@@ -311,7 +312,6 @@
     "dashboard/node_modules/vite/dist/node/index.d.ts",
     "dashboard/node_modules/vite/client.d.ts",
     "dashboard/node_modules/vite/types/package.json",
-    "dashboard/node_modules/vite/types/metadata.d.ts",
     "dashboard/node_modules/rollup/LICENSE.md",
     "dashboard/node_modules/@types/estree/README.md",
     "dashboard/node_modules/@rollup/rollup-win32-x64-msvc/README.md",

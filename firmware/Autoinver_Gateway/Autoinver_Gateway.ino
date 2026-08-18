@@ -428,7 +428,6 @@ void procesarPaqueteLoRa() {
     // Guardar en buffer local
     StaticJsonDocument<512> doc;
     doc["device_id"] = "AUTOINVER";
-    doc["ts_local"] = getTimestampStr();
     doc["temp_c"] = g_node.temp;
     doc["hum_pct"] = g_node.hum;
     doc["soil_adc"] = g_node.soilADC;
@@ -512,32 +511,52 @@ bool enviarSupabaseDirect(const String& jsonPayload) {
     return false;
   }
 
+  String payload = jsonPayload;
+  // Limpiar 'ts_local' de líneas antiguas del buffer (columna no existe en Supabase)
+  if (payload.indexOf("\"ts_local\"") >= 0) {
+    StaticJsonDocument<1024> doc;
+    if (deserializeJson(doc, payload) == DeserializationError::Ok) {
+      doc.remove("ts_local");
+      payload = "";
+      serializeJson(doc, payload);
+    }
+  }
+
   HTTPClient https;
   String url = String(SUPABASE_URL) + "/rest/v1/" + SUPABASE_TABLE;
-  
+
   https.setTimeout(15000);  // 15 seg timeout
   if (!https.begin(wifiSecure, url)) {
     Serial.println(F("[SUPA] Error: no se pudo iniciar conexion HTTPS"));
     return false;
   }
-  
+
   https.addHeader("apikey", SUPABASE_KEY);
   https.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
   https.addHeader("Content-Type", "application/json");
   https.addHeader("Prefer", "return=minimal");
-  
-  int httpCode = https.POST(jsonPayload);
-  https.end();
+
+  int httpCode = https.POST(payload);
 
   if (httpCode == 201 || httpCode == 200) {
     Serial.println(F("[SUPA] Dato enviado OK"));
+    https.end();
     return true;
   } else {
     Serial.print(F("[SUPA] Error HTTP "));
     Serial.print(httpCode);
     if (httpCode == -1) Serial.println(F(" (-1 = fallo SSL/TLS o DNS)"));
     else if (httpCode == -11) Serial.println(F(" (timeout)"));
-    else Serial.println();
+    else {
+      // Imprimir respuesta del servidor (PostgREST devuelve el motivo en JSON)
+      String resp = https.getString();
+      Serial.print(F(" -> "));
+      Serial.println(resp);
+      // También imprimir el payload enviado, para comparar
+      Serial.print(F("[SUPA] Payload: "));
+      Serial.println(payload);
+    }
+    https.end();
     return false;
   }
 }
