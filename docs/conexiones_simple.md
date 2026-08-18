@@ -100,14 +100,14 @@ Batería 3S (11.1V)  ──►  Buck-Boost 5V/3A  ──►  reparte 5V a todo
 
 ## Alimentación y control del PCA9685
 
-| Pin PCA9685 | Conectar a | ¿Por qué? |
-|-------------|-----------|-----------|
-| **VCC** | Heltec pin **3.3V** | Lógica I2C (SIEMPRE 3.3V) |
-| **GND** | Heltec pin **GND** | Tierra |
-| **SDA** | Heltec pin **GPIO21** | Datos I2C |
-| **SCL** | Heltec pin **GPIO22** | Reloj I2C |
-| **V+** | Buck-Boost **5V** | Fuerza para motores servos |
-| **GND** (terminal V+) | Heltec pin **GND** | Tierra de servos |
+| Pin PCA9685           | Conectar a            | ¿Por qué?                  |
+| --------------------- | --------------------- | -------------------------- |
+| **VCC**               | Heltec pin **3.3V**   | Lógica I2C (SIEMPRE 3.3V)  |
+| **GND**               | Heltec pin **GND**    | Tierra                     |
+| **SDA**               | Heltec pin **GPIO21** | Datos I2C                  |
+| **SCL**               | Heltec pin **GPIO22** | Reloj I2C                  |
+| **V+**                | Buck-Boost **5V**     | Fuerza para motores servos |
+| **GND** (terminal V+) | Heltec pin **GND**    | Tierra de servos           |
 
 > ⚠️ **CRÍTICO**: PCA9685 tiene **DOS** entradas de corriente:
 > - **VCC = 3.3V** → para la lógica I2C (nunca 5V o quemas el ESP32)

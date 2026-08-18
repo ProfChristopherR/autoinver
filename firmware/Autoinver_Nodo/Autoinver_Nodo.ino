@@ -25,9 +25,10 @@
 DHT dht(PIN_DHT, DHT_TYPE);
 Adafruit_SSD1306 display(SCREEN_W, SCREEN_H, &Wire, PIN_OLED_RST);
 ESP32Time rtc(GMT_OFFSET_SEC);
-// PCA9685 usa el segundo bus I2C (Wire1) en pines 21/22,
-// porque Wire (bus 0) ya lo ocupa el OLED en pines 4/15.
-Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(PCA9685_ADDR, Wire1);
+// PCA9685 comparte el bus I2C del OLED (Wire, pines 4/15).
+// En Heltec LoRa32 V2 el GPIO21 controla Vext, no se puede usar como SDA.
+// OLED (0x3C) y PCA9685 (0x40) tienen direcciones distintas: pueden coexistir.
+Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(PCA9685_ADDR, Wire);
 Preferences prefs;
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -300,15 +301,15 @@ void initActuators() {
   pinMode(PIN_RELE, OUTPUT);
   digitalWrite(PIN_RELE, LOW);
 
-  // Iniciar bus I2C dedicado para PCA9685 (pines 21/22)
-  Wire1.begin(PIN_SDA, PIN_SCL);
+  // PCA9685 comparte el bus I2C del OLED (Wire, pines 4/15).
+  // NOTA: GPIO21 en Heltec LoRa32 V2 controla Vext, no sirve como SDA.
 
-  // Escáner I2C de diagnóstico: lista dispositivos encontrados en pines 21/22
-  Serial.println(F("[I2C] Escaneando bus pines 21/22..."));
+  // Escáner I2C de diagnóstico: lista dispositivos en el bus (esperado: 0x3C OLED, 0x40 PCA9685)
+  Serial.println(F("[I2C] Escaneando bus pines 4/15..."));
   int found = 0;
   for (uint8_t addr = 1; addr < 127; addr++) {
-    Wire1.beginTransmission(addr);
-    if (Wire1.endTransmission() == 0) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
       Serial.print(F("[I2C] Dispositivo en 0x"));
       Serial.println(addr, HEX);
       found++;
@@ -319,7 +320,7 @@ void initActuators() {
   }
 
   if (!pca.begin()) {
-    Serial.println(F("[ERR] PCA9685 no detectado en I2C (pines 21/22). Servos deshabilitados."));
+    Serial.println(F("[ERR] PCA9685 no detectado en I2C (bus pines 4/15). Servos deshabilitados."));
     g_pcaOk = false;
   } else {
     pca.setPWMFreq(50);  // 50Hz para servos

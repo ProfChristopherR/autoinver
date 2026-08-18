@@ -50,8 +50,10 @@
 #define PIN_LORA_IRQ 26
 
 // --- I2C PCA9685 ---
-#define PIN_SDA 21
-#define PIN_SCL 22
+// El PCA9685 comparte el bus I2C del OLED (GPIO4/GPIO15).
+// GPIO21 en Heltec LoRa32 V2 controla Vext y NO debe usarse como SDA.
+#define PIN_SDA 4
+#define PIN_SCL 15
 #define PCA9685_ADDR 0x40
 
 // ═══════════════════════════════════════════════════════════════════════════════

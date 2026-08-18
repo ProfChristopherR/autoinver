@@ -125,12 +125,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "clave supabase.md",
+                "file": "docs/conexiones_simple.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "clave supabase"
+              "title": "conexiones_simple"
             }
           }
         ],
@@ -298,8 +298,14 @@
       "bases:Crear nueva base": false
     }
   },
-  "active": "ade78b5845c8ff0e",
+  "active": "bc12c601136d1743",
   "lastOpenFiles": [
+    "dashboard/vite.config.ts.timestamp-1787078272938-d12662e43b77e8.mjs",
+    "dashboard/sedQy0Ncb",
+    "clave supabase.md",
+    "dashboard/node_modules/vite/dist/node/index.js",
+    "dashboard/vite.config.ts.timestamp-1787077035009-2846e4f00f5cb8.mjs",
+    "dashboard/node_modules/esbuild/package.json",
     "dashboard/vite.config.ts.timestamp-1787075062413-54b788ed9246e.mjs",
     "dashboard/dist/index.html",
     "dashboard/dist",
@@ -307,17 +313,11 @@
     "dashboard/package-lock.json",
     "dashboard/node_modules/@esbuild/win32-x64/README.md",
     "dashboard/node_modules/@esbuild/win32-x64/package.json",
-    "dashboard/node_modules/vite/dist/node/types.d-aGj9QkWt.d.ts",
-    "dashboard/node_modules/vite/dist/node/runtime.d.ts",
-    "dashboard/node_modules/vite/dist/node/index.d.ts",
-    "dashboard/node_modules/vite/client.d.ts",
-    "dashboard/node_modules/vite/types/package.json",
     "dashboard/node_modules/rollup/LICENSE.md",
     "dashboard/node_modules/@types/estree/README.md",
     "dashboard/node_modules/@rollup/rollup-win32-x64-msvc/README.md",
     "dashboard/node_modules/picocolors/README.md",
     "docs/conexiones_simple.md",
-    "clave supabase.md",
     "docs/calibracion.md",
     "Documentacion/06-frontend-dashboard.md.md",
     "Documentacion/diagrama_conexiones_autoinver.png",
