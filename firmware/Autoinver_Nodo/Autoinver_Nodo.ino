@@ -303,6 +303,21 @@ void initActuators() {
   // Iniciar bus I2C dedicado para PCA9685 (pines 21/22)
   Wire1.begin(PIN_SDA, PIN_SCL);
 
+  // Escáner I2C de diagnóstico: lista dispositivos encontrados en pines 21/22
+  Serial.println(F("[I2C] Escaneando bus pines 21/22..."));
+  int found = 0;
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire1.beginTransmission(addr);
+    if (Wire1.endTransmission() == 0) {
+      Serial.print(F("[I2C] Dispositivo en 0x"));
+      Serial.println(addr, HEX);
+      found++;
+    }
+  }
+  if (found == 0) {
+    Serial.println(F("[I2C] NINGUN dispositivo encontrado -> revisar cableado SDA/SCL/VCC"));
+  }
+
   if (!pca.begin()) {
     Serial.println(F("[ERR] PCA9685 no detectado en I2C (pines 21/22). Servos deshabilitados."));
     g_pcaOk = false;
