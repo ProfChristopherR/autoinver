@@ -160,6 +160,7 @@ bool enviarSupabaseDirect(const String& jsonPayload);
 void flushBufferToSupabase();
 void guardarEnBuffer(const String& jsonLine);
 void pollComandosPendientes();
+void ackComando(long id);
 
 // Web Server
 void handleRoot();
@@ -630,10 +631,71 @@ void flushBufferToSupabase() {
 }
 
 void pollComandosPendientes() {
-  // NOTA: Implementar cuando se cree la tabla commands_queue en Supabase
-  // Por ahora, placeholder para futura expansión
-  // El gateway puede hacer GET a una vista que filtre comandos no ejecutados
-  // y marcarlos como ejecutados vía PATCH
+  if (!g_wifiConnected) return;
+
+  HTTPClient https;
+  String url = String(SUPABASE_URL) + "/rest/v1/commands_queue"
+             + "?device_id=eq.AUTOINVER&status=eq.PENDING"
+             + "&order=created_at.asc&limit=5"
+             + "&select=id,action,value";
+
+  https.setTimeout(10000);
+  if (!https.begin(wifiSecure, url)) {
+    Serial.println(F("[CMD] Error: no se pudo iniciar conexion HTTPS"));
+    return;
+  }
+  https.addHeader("apikey", SUPABASE_KEY);
+  https.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
+
+  int httpCode = https.GET();
+  if (httpCode != 200) {
+    Serial.print(F("[CMD] Error HTTP ")); Serial.println(httpCode);
+    https.end();
+    return;
+  }
+
+  String body = https.getString();
+  https.end();
+
+  StaticJsonDocument<1024> doc;
+  if (deserializeJson(doc, body) != DeserializationError::Ok) return;
+
+  for (JsonObject cmd : doc.as<JsonArray>()) {
+    long id = cmd["id"] | 0;
+    String action = cmd["action"] | "";
+    String value = cmd["value"] | "";
+
+    if (id == 0 || action.length() == 0) continue;
+
+    Serial.print(F("[CMD] Ejecutando: "));
+    Serial.print(action); Serial.print(F(" = ")); Serial.println(value);
+
+    // Enviar al nodo por LoRa
+    enviarComandoLoRa(action, value);
+
+    // Marcar como ACK en Supabase
+    ackComando(id);
+  }
+}
+
+void ackComando(long id) {
+  if (!g_wifiConnected) return;
+
+  HTTPClient https;
+  String url = String(SUPABASE_URL) + "/rest/v1/commands_queue?id=eq." + String(id);
+
+  https.setTimeout(10000);
+  if (!https.begin(wifiSecure, url)) return;
+  https.addHeader("apikey", SUPABASE_KEY);
+  https.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
+  https.addHeader("Content-Type", "application/json");
+  https.addHeader("Prefer", "return=minimal");
+
+  int httpCode = https.PATCH("{\"status\":\"ACK\",\"ack_at\":\"now()\"}");
+  if (httpCode != 200 && httpCode != 204) {
+    Serial.print(F("[CMD] Error ACK HTTP ")); Serial.println(httpCode);
+  }
+  https.end();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
