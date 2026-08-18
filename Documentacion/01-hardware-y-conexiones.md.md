@@ -29,8 +29,9 @@
 
 ## Driver Servos
 - **PCA9685** (I2C 0x40)
-- SDA → GPIO21
-- SCL → GPIO22
+- SDA → GPIO4 (bus I2C compartido con OLED)
+- SCL → GPIO15 (bus I2C compartido con OLED)
+- ⚠️ GPIO21 NO usar: en Heltec LoRa32 V2 controla Vext
 - VCC → 3.3V (lógica I2C)
 - V+ → 5V (alimentación servos)
 

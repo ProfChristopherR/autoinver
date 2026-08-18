@@ -35,12 +35,13 @@
     │  │ GPIO32 ◄─────── Sharp IR Vo  (ADC nivel agua)                    │   │
     │  │ GPIO12 ───────► Relé IN    (Bomba ON/OFF)                        │   │
     │  │                                                                  │   │
-    │  │ GPIO21 ────┬──► PCA9685 SDA (I2C)                                │   │
-    │  │ GPIO22 ────┴──► PCA9685 SCL (I2C)                                │   │
-    │  │                                                                  │   │
-    │  │ GPIO4  ───────► OLED SDA  (interno)                              │   │
-    │  │ GPIO15 ───────► OLED SCL  (interno)                              │   │
+    │  │ GPIO4  ────┬──► OLED SDA  (interno)                              │   │
+    │  │            └──► PCA9685 SDA (I2C, bus compartido)                │   │
+    │  │ GPIO15 ────┬──► OLED SCL  (interno)                              │   │
+    │  │            └──► PCA9685 SCL (I2C, bus compartido)                │   │
     │  │ GPIO16 ───────► OLED RST  (interno)                              │   │
+    │  │                                                                  │   │
+    │  │ ⚠️ GPIO21 NO usar: controla Vext en Heltec LoRa32 V2             │   │
     │  │                                                                  │   │
     │  │ GPIO5  ── LoRa SCK   (interno, NO TOCAR)                         │   │
     │  │ GPIO19 ── LoRa MISO  (interno, NO TOCAR)                         │   │
@@ -61,8 +62,8 @@
                     │  VCC  ───► 3.3V (lógica I2C)         │
                     │  V+   ───► 5V (alimentación servos)  │
                     │  GND  ───► GND común                  │
-                    │  SDA  ───► GPIO21                     │
-                    │  SCL  ───► GPIO22                     │
+                    │  SDA  ───► GPIO4 (compartido con OLED)  │
+                    │  SCL  ───► GPIO15 (compartido con OLED) │
                     │                                      │
                     │  PWM0 ───► Servo A (Compuerta A)     │
                     │  PWM1 ───► Servo B (Compuerta B)     │
@@ -103,8 +104,8 @@
 ### 4️⃣ Heltec LoRa32 V2 → PCA9685 (I2C)
 | Pin Heltec | Pin PCA9685 | Función | Cable | Nota |
 |------------|-------------|---------|-------|------|
-| **GPIO21** | SDA | I2C Data | Azul | Con pull-up interno ESP32 |
-| **GPIO22** | SCL | I2C Clock | Morado | Con pull-up interno ESP32 |
+| **GPIO4** | SDA | I2C Data | Azul | Bus compartido con OLED |
+| **GPIO15** | SCL | I2C Clock | Morado | Bus compartido con OLED |
 | 3.3V OUT | VCC | Lógica I2C | Naranja | **Solo 3.3V para lógica** |
 | GND | GND | Tierra | Negro | Bus GND |
 | Buck-Boost 5V OUT | V+ | Fuerza servos | Rojo | **5V para motores servos** |
@@ -233,7 +234,7 @@ Antes de conectar la batería o encender, verifica:
 | PCA9685 VCC a 5V | **Quemar I2C del ESP32** | VCC = 3.3V SIEMPRE |
 | DHT22 a 5V | Sensor puede dañarse | DHT22 a 3.3V |
 | No conectar antena LoRa | **Quemar módulo SX1276** | Conectar antena antes de energizar |
-| GPIO4/15/16 usados para I2C | Conflicto con OLED interno | Usar GPIO21/22 para I2C externo |
+| GPIO21 usado como SDA | **No funciona: GPIO21 controla Vext en Heltec V2** | PCA9685 en GPIO4/15 (bus compartido con OLED) |
 | Servos sin V+ en PCA9685 | Servos no responden | V+ del PCA9685 a 5V |
 | GND no común | Comportamiento errático | Unir TODOS los GND |
 | Bomba sin diodo flyback | Picos de voltaje dañan relé | Usar relé con optoacoplador (ya incluido en módulo) |
@@ -330,8 +331,8 @@ Antes de conectar la batería o encender, verifica:
 6. Verificar lectura ADC
 
 ### Paso 4: Conectar PCA9685 y servos
-1. PCA9685: VCC→3.3V, V+→5V, GND→GND, SDA→GPIO21, SCL→GPIO22
-2. Verificar con I2C scanner que aparece en 0x40
+1. PCA9685: VCC→3.3V, V+→5V, GND→GND, SDA→GPIO4, SCL→GPIO15 (bus compartido con OLED)
+2. Verificar con I2C scanner que aparece en 0x40 (el firmware lo imprime al arrancar)
 3. Conectar servos (sin mecánica todavía)
 4. Verificar que se mueven al encender
 

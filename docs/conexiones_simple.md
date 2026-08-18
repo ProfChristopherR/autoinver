@@ -104,8 +104,8 @@ Batería 3S (11.1V)  ──►  Buck-Boost 5V/3A  ──►  reparte 5V a todo
 | --------------------- | --------------------- | -------------------------- |
 | **VCC**               | Heltec pin **3.3V**   | Lógica I2C (SIEMPRE 3.3V)  |
 | **GND**               | Heltec pin **GND**    | Tierra                     |
-| **SDA**               | Heltec pin **GPIO21** | Datos I2C                  |
-| **SCL**               | Heltec pin **GPIO22** | Reloj I2C                  |
+| **SDA**               | Heltec pin **GPIO4**  | Datos I2C (bus compartido con OLED) |
+| **SCL**               | Heltec pin **GPIO15** | Reloj I2C (bus compartido con OLED) |
 | **V+**                | Buck-Boost **5V**     | Fuerza para motores servos |
 | **GND** (terminal V+) | Heltec pin **GND**    | Tierra de servos           |
 
@@ -191,13 +191,15 @@ Cada servo tiene 3 cables:
 │                                             │
 │   GPIO12 ───●────► Relé IN                  │
 │                                             │
-│   GPIO21 ───●────► PCA9685 SDA              │
+│   GPIO4 ────●────► PCA9685 SDA              │
+│                └─► (compartido con OLED)    │
 │                                             │
-│   GPIO22 ───●────► PCA9685 SCL              │
+│   GPIO15 ───●────► PCA9685 SCL              │
+│                └─► (compartido con OLED)    │
 │                                             │
 │   ┌─────────────┐                           │
 │   │ OLED interno│  ← Usa GPIO4/15/16        │
-│   │   (ya está) │    NO conectar nada ahí   │
+│   │   (ya está) │    I2C compartido OK      │
 │   └─────────────┘                           │
 │                                             │
 │   ┌─────────────┐                           │
@@ -287,8 +289,8 @@ GPIO25├──────┘  │   │  │
 GPIO33├─────────┘   │  │
 GPIO32├─────────────┘  │
 GPIO12├────────────────┘
-GPIO21├──► SDA
-GPIO22├──► SCL
+GPIO4 ├──► SDA (compartido con OLED)
+GPIO15├──► SCL (compartido con OLED)
 ```
 
 ---
@@ -303,8 +305,8 @@ GPIO22├──► SCL
 | **GPIO33** | Hum Suelo | SIGNAL |
 | **GPIO32** | Sharp IR | Amarillo (Vo) |
 | **GPIO12** | Relé | IN |
-| **GPIO21** | PCA9685 | SDA |
-| **GPIO22** | PCA9685 | SCL |
+| **GPIO4** | PCA9685 | SDA (bus compartido con OLED) |
+| **GPIO15** | PCA9685 | SCL (bus compartido con OLED) |
 | **VIN** | Buck-Boost | 5V OUT |
 
 | Pin Buck-Boost 5V | ¿A qué va? |
