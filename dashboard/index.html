@@ -706,12 +706,14 @@
     });
 
     function initSupabase() {
-      if (typeof supabaseLib === 'undefined' || SUPABASE_URL.includes('%VITE_')) {
-        console.error('Supabase no configurado: faltan VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY en el build');
+      // La librería UMD de Supabase expone window.supabase; la variable local
+      // 'supabase' (let supabase = null) la ensombrece, por eso usamos window.supabase
+      if (typeof window.supabase === 'undefined' || SUPABASE_URL.includes('%VITE_')) {
+        console.error('Supabase no configurado: librería no cargada o faltan VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY en el build');
         updateConnectionStatus(false, 'Sin conexión');
         return;
       }
-      supabase = supabaseLib.createClient(SUPABASE_URL, SUPABASE_KEY);
+      supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
       
       // Suscribirse a cambios en tiempo real
       realtimeSubscription = supabase
