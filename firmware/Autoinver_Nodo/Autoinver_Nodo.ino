@@ -323,8 +323,20 @@ void initActuators() {
     Serial.println(F("[ERR] PCA9685 no detectado en I2C (bus pines 4/15). Servos deshabilitados."));
     g_pcaOk = false;
   } else {
+    // Clones del PCA9685 suelen tener oscilador de 27MHz (original: 25MHz).
+    // Si no se calibra, los pulsos salen ~8% más cortos y el servo no se mueve.
+    pca.setOscillatorFrequency(27000000);
     pca.setPWMFreq(50);  // 50Hz para servos
     g_pcaOk = true;
+
+    // Prueba de barrido al arranque: el servo debe moverse 0->90->0
+    Serial.println(F("[SERVO] Prueba de barrido en PWM0..."));
+    setServoAngle(CHANNEL_SERVO_A, 0);
+    delay(800);
+    setServoAngle(CHANNEL_SERVO_A, 90);
+    delay(800);
+    setServoAngle(CHANNEL_SERVO_A, 0);
+    delay(800);
 
     // Posición segura inicial
     setServoAngle(CHANNEL_SERVO_A, VENT_CLOSED);
