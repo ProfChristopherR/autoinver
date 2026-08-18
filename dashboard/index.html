@@ -553,7 +553,7 @@
           <span class="pulse-dot" id="connDot"></span>
           <span id="connText">Conectando...</span>
         </div>
-        <button class="btn" onclick="refreshData()">🔄 Actualizar</button>
+        <button class="btn" id="btnRefresh" onclick="manualRefresh()">🔄 Actualizar</button>
       </div>
     </header>
 
@@ -624,10 +624,10 @@
               <button class="btn btn-danger" id="btnPumpOff" onclick="sendCommand('BOMBA', '0')">Apagar</button>
             </div>
             <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
-              <span class="toggle-switch">
+              <label class="toggle-switch">
                 <input type="checkbox" id="autoMode" checked onchange="sendCommand('MODE', this.checked ? 'AUTO' : 'MANUAL')">
                 <span class="toggle-slider"></span>
-              </span>
+              </label>
               <span style="font-size:0.85rem; color:var(--text-secondary);">Modo Automático</span>
             </div>
           </div>
@@ -660,6 +660,17 @@
       </div>
     </div>
 
+    <!-- Command Queue -->
+    <div class="section">
+      <div class="section-header">
+        <h3 class="section-title">📤 Cola de Comandos</h3>
+        <button class="btn" onclick="loadCommandQueue()">🔄</button>
+      </div>
+      <div class="timeline" id="commandQueue">
+        <div style="text-align:center; padding:20px; color:var(--text-muted);">Cargando comandos...</div>
+      </div>
+    </div>
+
     <!-- Footer -->
     <footer class="footer">
       Autoinver v2.0 · IoT Agriculture · Conectado a <span id="footerSupabase">Supabase</span>
@@ -687,6 +698,7 @@
     let supaClient = null;
     let mainChart = null;
     let lastData = null;
+    let lastDataAt = 0;        // timestamp del último dato recibido
     let timeRange = '1h';
     let isConnected = false;
     let realtimeSubscription = null;
@@ -703,6 +715,19 @@
       // Auto-refresh cada 10 segundos
       setInterval(refreshData, 10000);
       setInterval(loadEvents, 30000);
+      loadCommandQueue();
+      setInterval(loadCommandQueue, 10000);
+
+      // Verificar frescura de datos cada 5s: si no llega nada en 30s, no estamos "en vivo"
+      setInterval(() => {
+        if (lastDataAt === 0) return;
+        const age = (Date.now() - lastDataAt) / 1000;
+        if (age > 30) {
+          updateConnectionStatus(false, `Sin datos (${Math.round(age)}s)`);
+        } else {
+          updateConnectionStatus(true, `En vivo (${Math.round(age)}s)`);
+        }
+      }, 5000);
     });
 
     function initSupabase() {
@@ -723,11 +748,11 @@
           schema: 'public',
           table: 'autoinver_data'
         }, (payload) => {
+          lastDataAt = Date.now();
           updateDashboard(payload.new);
         })
         .subscribe((status) => {
-          const connected = status === 'SUBSCRIBED';
-          updateConnectionStatus(connected, connected ? 'En vivo' : 'Desconectado');
+          console.log('Realtime status:', status);
         });
     }
 
@@ -818,6 +843,17 @@
     // ═══════════════════════════════════════════════════════════════════════════════
     // OBTENER DATOS
     // ═══════════════════════════════════════════════════════════════════════════════
+    function manualRefresh() {
+      const btn = document.getElementById('btnRefresh');
+      btn.disabled = true;
+      btn.textContent = '⏳ Actualizando...';
+      Promise.all([refreshData(), loadEvents(), loadCommandQueue()]).finally(() => {
+        btn.disabled = false;
+        btn.textContent = '🔄 Actualizar';
+        showToast('🔄 Datos actualizados', 'info');
+      });
+    }
+
     async function refreshData() {
       if (!supaClient) {
         // Fallback: intentar desde gateway local
@@ -838,9 +874,12 @@
 
         if (data && data.length > 0) {
           const latest = data[data.length - 1];
+          lastDataAt = new Date(latest.created_at).getTime();
           updateDashboard(latest);
           updateChart(data);
           updateConnectionStatus(true, 'Conectado');
+        } else {
+          updateConnectionStatus(false, 'Sin datos recientes');
         }
       } catch (err) {
         console.error('Error fetching data:', err);
@@ -1015,6 +1054,80 @@
       }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // COLA DE COMANDOS
+    // ═══════════════════════════════════════════════════════════════════════════════
+    async function loadCommandQueue() {
+      if (!supaClient) return;
+
+      try {
+        const { data, error } = await supaClient
+          .from('commands_queue')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        if (error) throw error;
+
+        const container = document.getElementById('commandQueue');
+        if (!data || data.length === 0) {
+          container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">Sin comandos recientes</div>';
+          return;
+        }
+
+        container.innerHTML = data.map(cmd => {
+          const statusColor = {
+            'PENDING': 'var(--accent-amber)',
+            'SENT': 'var(--accent-blue)',
+            'ACK': 'var(--accent-green)',
+            'FAILED': 'var(--accent-red)',
+            'EXPIRED': 'var(--text-muted)',
+            'CANCELLED': 'var(--text-muted)'
+          }[cmd.status] || 'var(--text-muted)';
+
+          const time = new Date(cmd.created_at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+          const cancelBtn = cmd.status === 'PENDING'
+            ? `<button class="btn btn-danger" style="padding:4px 10px;font-size:0.75rem;" onclick="cancelCommand(${cmd.id})">✖ Anular</button>`
+            : '';
+
+          return `
+            <div class="timeline-item">
+              <div class="timeline-dot" style="background:${statusColor}"></div>
+              <div class="timeline-content">
+                <div class="timeline-time">${time}</div>
+                <div class="timeline-text">
+                  <strong>${cmd.action}</strong> = ${cmd.value}
+                  <span class="timeline-badge" style="background:rgba(255,255,255,0.08);color:${statusColor}">${cmd.status}</span>
+                </div>
+              </div>
+              ${cancelBtn}
+            </div>
+          `;
+        }).join('');
+      } catch (err) {
+        console.error('Error loading command queue:', err);
+      }
+    }
+
+    async function cancelCommand(id) {
+      if (!supaClient) return;
+      try {
+        const { error } = await supaClient
+          .from('commands_queue')
+          .update({ status: 'CANCELLED' })
+          .eq('id', id)
+          .eq('status', 'PENDING');
+
+        if (error) throw error;
+        showToast('✅ Comando anulado', 'success');
+        loadCommandQueue();
+      } catch (err) {
+        console.error('Error cancelando comando:', err);
+        showToast('❌ No se pudo anular', 'error');
+      }
+    }
+
     function formatEventType(type) {
       const map = {
         'PUMP_ON': '💧 Bomba encendida',
@@ -1049,7 +1162,8 @@
             }]);
           
           if (error) throw error;
-          showToast(`✅ Comando ${action} enviado a la cola`, 'success');
+          showToast(`✅ Comando ${action} enviado`, 'success');
+          setTimeout(loadCommandQueue, 500);
           return;
         } catch (err) {
           console.error('Supabase command error:', err);
