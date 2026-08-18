@@ -25,7 +25,9 @@
 DHT dht(PIN_DHT, DHT_TYPE);
 Adafruit_SSD1306 display(SCREEN_W, SCREEN_H, &Wire, PIN_OLED_RST);
 ESP32Time rtc(GMT_OFFSET_SEC);
-Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(PCA9685_ADDR);
+// PCA9685 usa el segundo bus I2C (Wire1) en pines 21/22,
+// porque Wire (bus 0) ya lo ocupa el OLED en pines 4/15.
+Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(PCA9685_ADDR, Wire1);
 Preferences prefs;
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -87,6 +89,7 @@ TelemetryFrame g_telemetry;
 
 SystemMode    g_mode        = MODE_AUTO;
 SyncState     g_syncState   = SYNC_NONE;
+bool          g_pcaOk       = false;  // PCA9685 detectado en I2C
 
 // Timestamps no-bloqueantes
 unsigned long g_lastSensorRead  = 0;
@@ -297,15 +300,23 @@ void initActuators() {
   pinMode(PIN_RELE, OUTPUT);
   digitalWrite(PIN_RELE, LOW);
 
-  pca.begin();
-  pca.setPWMFreq(50);  // 50Hz para servos
+  // Iniciar bus I2C dedicado para PCA9685 (pines 21/22)
+  Wire1.begin(PIN_SDA, PIN_SCL);
 
-  // Posición segura inicial
-  setServoAngle(CHANNEL_SERVO_A, VENT_CLOSED);
-  setServoAngle(CHANNEL_SERVO_B, VENT_CLOSED);
-  
-  g_actuators.servo1Pos = VENT_CLOSED;
-  g_actuators.servo2Pos = VENT_CLOSED;
+  if (!pca.begin()) {
+    Serial.println(F("[ERR] PCA9685 no detectado en I2C (pines 21/22). Servos deshabilitados."));
+    g_pcaOk = false;
+  } else {
+    pca.setPWMFreq(50);  // 50Hz para servos
+    g_pcaOk = true;
+
+    // Posición segura inicial
+    setServoAngle(CHANNEL_SERVO_A, VENT_CLOSED);
+    setServoAngle(CHANNEL_SERVO_B, VENT_CLOSED);
+
+    g_actuators.servo1Pos = VENT_CLOSED;
+    g_actuators.servo2Pos = VENT_CLOSED;
+  }
 
   Serial.println(F("[OK] Actuadores iniciados (posición segura)"));
 }
@@ -474,10 +485,20 @@ void controlIrrigation() {
 }
 
 void activatePump(bool on, bool automatic) {
+  // Protección: nunca encender sin agua suficiente (evita quemar la bomba)
+  if (on && g_sensors.waterPct < WATER_MIN_PCT) {
+    Serial.print(F("[PUMP] BLOQUEADO: agua "));
+    Serial.print(g_sensors.waterPct, 1);
+    Serial.print(F("% < mínimo "));
+    Serial.print(WATER_MIN_PCT, 0);
+    Serial.println(F("%"));
+    return;
+  }
+
   g_actuators.pumpOn = on;
   g_actuators.pumpAuto = automatic;
   digitalWrite(PIN_RELE, on ? HIGH : LOW);
-  
+
   if (on) {
     g_actuators.pumpStartMs = millis();
     Serial.println(F("[PUMP] Bomba ENCENDIDA"));
@@ -489,8 +510,15 @@ void activatePump(bool on, bool automatic) {
 void managePumpTimeout(unsigned long now) {
   if (!g_actuators.pumpOn) return;
 
+  // Corte de emergencia: el agua bajó del mínimo mientras regaba
+  if (g_sensors.waterPct < WATER_MIN_PCT) {
+    activatePump(false, g_actuators.pumpAuto);
+    Serial.println(F("[PUMP] CORTE DE EMERGENCIA: nivel de agua bajo"));
+    return;
+  }
+
   unsigned long elapsed = now - g_actuators.pumpStartMs;
-  
+
   // Timeout de seguridad (evitar inundación)
   if (elapsed >= (unsigned long)g_config.pumpDuration) {
     activatePump(false, g_actuators.pumpAuto);
@@ -503,6 +531,10 @@ void managePumpTimeout(unsigned long now) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void setServoAngle(uint8_t channel, uint16_t angle) {
+  if (!g_pcaOk) {
+    Serial.println(F("[SERVO] Ignorado: PCA9685 no disponible"));
+    return;
+  }
   uint16_t pulse = map(constrain(angle, 0, 180), 0, 180, SERVO_PULSE_MIN, SERVO_PULSE_MAX);
   pca.setPWM(channel, 0, pulse);
   

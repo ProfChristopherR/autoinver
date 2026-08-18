@@ -79,7 +79,7 @@
 
 #define TEMP_HYSTERESIS 1.5f      // °C de histeresis para compuertas
 #define SOIL_HYSTERESIS 10.0f     // % de histeresis para riego
-#define WATER_MIN_PCT 20.0f       // % mínimo de agua para permitir riego
+#define WATER_MIN_PCT 10.0f       // % mínimo de agua para permitir riego (corte de seguridad)
 #define MANUAL_OVERRIDE_MS 600000 // 10 minutos de override manual
 #define MAX_SYNC_ATTEMPTS 5       // Intentos máximos de sync hora
 
