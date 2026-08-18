@@ -157,6 +157,7 @@ void parsearTelemetria(const String& payload);
 
 // Supabase / Cloud
 bool enviarSupabaseDirect(const String& jsonPayload);
+bool enviarSupabaseBatch(String* lineas, int count);
 void flushBufferToSupabase();
 void guardarEnBuffer(const String& jsonLine);
 void pollComandosPendientes();
@@ -591,35 +592,130 @@ void guardarEnBuffer(const String& jsonLine) {
   }
 }
 
+// Envía un lote de registros en UN solo POST (array JSON). PostgREST lo soporta nativamente.
+// Esto evita un handshake TLS por cada línea (cada uno toma 1-2s en el ESP32).
+bool enviarSupabaseBatch(String* lineas, int count) {
+  if (!g_wifiConnected || count == 0) return false;
+
+  // Construir array JSON, limpiando ts_local de líneas antiguas
+  String payload = "[";
+  int validas = 0;
+  for (int i = 0; i < count; i++) {
+    String linea = lineas[i];
+    if (linea.indexOf("\"ts_local\"") >= 0) {
+      StaticJsonDocument<1024> doc;
+      if (deserializeJson(doc, linea) == DeserializationError::Ok) {
+        doc.remove("ts_local");
+        linea = "";
+        serializeJson(doc, linea);
+      }
+    }
+    if (linea.length() < 10) continue;
+    if (validas > 0) payload += ",";
+    payload += linea;
+    validas++;
+  }
+  payload += "]";
+
+  if (validas == 0) return true;  // nada que enviar
+
+  HTTPClient https;
+  String url = String(SUPABASE_URL) + "/rest/v1/" + SUPABASE_TABLE;
+
+  https.setTimeout(20000);
+  if (!https.begin(wifiSecure, url)) {
+    Serial.println(F("[SUPA] Error: no se pudo iniciar conexion HTTPS"));
+    return false;
+  }
+
+  https.addHeader("apikey", SUPABASE_KEY);
+  https.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
+  https.addHeader("Content-Type", "application/json");
+  https.addHeader("Prefer", "return=minimal");
+
+  int httpCode = https.POST(payload);
+
+  if (httpCode == 201 || httpCode == 200) {
+    Serial.print(F("[SUPA] Lote enviado OK ("));
+    Serial.print(validas);
+    Serial.println(F(" registros)"));
+    https.end();
+    return true;
+  }
+
+  Serial.print(F("[SUPA] Error batch HTTP "));
+  Serial.print(httpCode);
+  if (httpCode == -1) Serial.println(F(" (-1 = fallo SSL/TLS o DNS)"));
+  else if (httpCode == -11) Serial.println(F(" (timeout)"));
+  else {
+    Serial.print(F(" -> "));
+    Serial.println(https.getString());
+  }
+  https.end();
+  return false;
+}
+
 void flushBufferToSupabase() {
   if (!g_wifiConnected || g_bufferLines == 0) return;
 
   File f = SPIFFS.open(BUFFER_FILE, "r");
   if (!f) return;
 
-  String nuevoBuffer = "";
+  const int BATCH_SIZE = 20;  // registros por POST
+  String lineas[BATCH_SIZE];
+  int pendientes = 0;
   int enviados = 0;
-  int fallidos = 0;
 
   while (f.available()) {
     String linea = f.readStringUntil('\n');
     if (linea.length() < 10) continue;
 
-    if (enviarSupabaseDirect(linea)) {
-      enviados++;
-      delay(50);  // Rate limiting amigable
-    } else {
-      fallidos++;
-      nuevoBuffer += linea + "\n";
+    lineas[pendientes++] = linea;
+
+    if (pendientes == BATCH_SIZE) {
+      if (enviarSupabaseBatch(lineas, pendientes)) {
+        enviados += pendientes;
+        pendientes = 0;
+      } else {
+        // Fallo de red: conservar lo que queda y salir
+        String nuevoBuffer = "";
+        for (int i = 0; i < pendientes; i++) nuevoBuffer += lineas[i] + "\n";
+        while (f.available()) {
+          String resto = f.readStringUntil('\n');
+          if (resto.length() >= 10) nuevoBuffer += resto + "\n";
+        }
+        f.close();
+        SPIFFS.remove(BUFFER_FILE);
+        File f2 = SPIFFS.open(BUFFER_FILE, "w");
+        if (f2) { f2.print(nuevoBuffer); f2.close(); }
+        g_bufferLines = enviados > 0 ? (g_bufferLines - enviados) : g_bufferLines;
+        Serial.print(F("[BUF] Flush parcial: "));
+        Serial.print(enviados);
+        Serial.println(F(" enviados, resto queda en buffer"));
+        return;
+      }
     }
   }
   f.close();
 
-  // Reescribir buffer con los fallidos
+  // Enviar el último lote (menor a BATCH_SIZE)
+  int fallidos = 0;
+  if (pendientes > 0) {
+    if (enviarSupabaseBatch(lineas, pendientes)) {
+      enviados += pendientes;
+    } else {
+      fallidos = pendientes;
+    }
+  }
+
+  // Reescribir buffer solo con los fallidos
   SPIFFS.remove(BUFFER_FILE);
-  if (nuevoBuffer.length() > 0) {
+  if (fallidos > 0) {
     File f2 = SPIFFS.open(BUFFER_FILE, "w");
-    if (f2) { f2.print(nuevoBuffer); f2.close(); }
+    if (f2) {
+      for (int i = 0; i < fallidos; i++) f2.println(lineas[i]);
+      f2.close();
+    }
   }
   g_bufferLines = fallidos;
 
