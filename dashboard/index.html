@@ -684,7 +684,7 @@
     // ═══════════════════════════════════════════════════════════════════════════════
     // ESTADO GLOBAL
     // ═══════════════════════════════════════════════════════════════════════════════
-    let supabase = null;
+    let supaClient = null;
     let mainChart = null;
     let lastData = null;
     let timeRange = '1h';
@@ -706,17 +706,17 @@
     });
 
     function initSupabase() {
-      // La librería UMD de Supabase expone window.supabase; la variable local
-      // 'supabase' (let supabase = null) la ensombrece, por eso usamos window.supabase
+      // La librería UMD de Supabase se carga como global 'supabase' (window.supabase);
+      // el cliente lo guardamos en 'supaClient' para no chocar con ese global.
       if (typeof window.supabase === 'undefined' || SUPABASE_URL.includes('%VITE_')) {
         console.error('Supabase no configurado: librería no cargada o faltan VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY en el build');
         updateConnectionStatus(false, 'Sin conexión');
         return;
       }
-      supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      supaClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
       
       // Suscribirse a cambios en tiempo real
-      realtimeSubscription = supabase
+      realtimeSubscription = supaClient
         .channel('autoinver_changes')
         .on('postgres_changes', {
           event: 'INSERT',
@@ -819,7 +819,7 @@
     // OBTENER DATOS
     // ═══════════════════════════════════════════════════════════════════════════════
     async function refreshData() {
-      if (!supabase) {
+      if (!supaClient) {
         // Fallback: intentar desde gateway local
         tryFetchFromGateway();
         return;
@@ -828,7 +828,7 @@
       try {
         const since = getTimeRangeDate();
         
-        const { data, error } = await supabase
+        const { data, error } = await supaClient
           .from('autoinver_data')
           .select('*')
           .gte('created_at', since.toISOString())
@@ -968,10 +968,10 @@
     // EVENTOS
     // ═══════════════════════════════════════════════════════════════════════════════
     async function loadEvents() {
-      if (!supabase) return;
+      if (!supaClient) return;
       
       try {
-        const { data, error } = await supabase
+        const { data, error } = await supaClient
           .from('autoinver_events')
           .select('*')
           .order('created_at', { ascending: false })
@@ -1037,9 +1037,9 @@
       showToast(`Enviando: ${action} = ${value}...`, 'info');
       
       // Intentar via Supabase
-      if (supabase) {
+      if (supaClient) {
         try {
-          const { error } = await supabase
+          const { error } = await supaClient
             .from('commands_queue')
             .insert([{
               device_id: 'AUTOINVER',
