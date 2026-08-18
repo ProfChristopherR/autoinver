@@ -1,0 +1,11 @@
+# Dependencias y builds
+node_modules/
+dist/
+
+# Secretos y credenciales
+.env
+.env.local
+clave supabase.md
+
+# Obsidian (opcional, descomentar si no quieres subirlo)
+# .obsidian/

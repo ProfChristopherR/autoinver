@@ -1,0 +1,336 @@
+{
+  "main": {
+    "id": "4ec6cc8b18d53a34",
+    "type": "split",
+    "children": [
+      {
+        "id": "b6a5ff2a3e57fc5c",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "d099c26b2b2132c0",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Documentacion/00-contexto-y-mvp.md.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "00-contexto-y-mvp.md"
+            }
+          },
+          {
+            "id": "42448b156194d57d",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Documentacion/01-hardware-y-conexiones.md.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "01-hardware-y-conexiones.md"
+            }
+          },
+          {
+            "id": "02f956ecaa010cd5",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Documentacion/02-protocolo-comunicacion.md.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "02-protocolo-comunicacion.md"
+            }
+          },
+          {
+            "id": "5a064a79fdaa460f",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Documentacion/03-nodo-autoinver-codigo.md.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "03-nodo-autoinver-codigo.md"
+            }
+          },
+          {
+            "id": "d43a592d085256f6",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Documentacion/04-gateway-estacion-codigo.md.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "04-gateway-estacion-codigo.md"
+            }
+          },
+          {
+            "id": "a3d04e8b418610fb",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Documentacion/05-backend-supabase.md.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "05-backend-supabase.md"
+            }
+          },
+          {
+            "id": "b729e3945f4d14ef",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Documentacion/06-frontend-dashboard.md.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "06-frontend-dashboard.md"
+            }
+          },
+          {
+            "id": "fdd4436af9de1bde",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "docs/conexiones_simple.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "conexiones_simple"
+            }
+          },
+          {
+            "id": "bc12c601136d1743",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "clave supabase.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "clave supabase"
+            }
+          }
+        ],
+        "currentTab": 8
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "3764adc7ba87db51",
+    "type": "split",
+    "children": [
+      {
+        "id": "244b427bc09adead",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "ade78b5845c8ff0e",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Explorador de archivos"
+            }
+          },
+          {
+            "id": "e6c5ba120e225fec",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Buscar"
+            }
+          },
+          {
+            "id": "5cd365b9c38efe1d",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Marcadores"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "1b3875d62e4a7d00",
+    "type": "split",
+    "children": [
+      {
+        "id": "f64e9b26d6b1c149",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "4afa1a164f335dca",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "docs/conexiones_simple.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Enlaces entrantes de conexiones_simple"
+            }
+          },
+          {
+            "id": "0594191c67fe1b01",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "docs/conexiones_simple.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Enlaces salientes de conexiones_simple"
+            }
+          },
+          {
+            "id": "4a547f0b558d3d80",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Etiquetas"
+            }
+          },
+          {
+            "id": "367fb75e4ec4a3a7",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "Todas las propiedades"
+            }
+          },
+          {
+            "id": "9a7af9111583386f",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "docs/conexiones_simple.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Esquema de conexiones_simple"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Abrir selector rápido": false,
+      "graph:Abrir vista gráfica": false,
+      "canvas:Crear nuevo lienzo": false,
+      "daily-notes:Abrir la nota de hoy": false,
+      "templates:Insertar plantilla": false,
+      "command-palette:Abrir paleta de comandos": false,
+      "bases:Crear nueva base": false
+    }
+  },
+  "active": "ade78b5845c8ff0e",
+  "lastOpenFiles": [
+    "dashboard/dist/index.html",
+    "dashboard/dist",
+    "dashboard/vite.config.ts.timestamp-1787073022102-b88b61fde65c5.mjs",
+    "dashboard/package-lock.json",
+    "dashboard/node_modules/@esbuild/win32-x64/README.md",
+    "dashboard/node_modules/@esbuild/win32-x64/package.json",
+    "dashboard/node_modules/vite/dist/node/types.d-aGj9QkWt.d.ts",
+    "dashboard/node_modules/vite/dist/node/runtime.d.ts",
+    "dashboard/node_modules/vite/dist/node/index.d.ts",
+    "dashboard/node_modules/vite/client.d.ts",
+    "dashboard/node_modules/vite/types/package.json",
+    "dashboard/node_modules/vite/types/metadata.d.ts",
+    "dashboard/node_modules/rollup/LICENSE.md",
+    "dashboard/node_modules/@types/estree/README.md",
+    "dashboard/node_modules/@rollup/rollup-win32-x64-msvc/README.md",
+    "dashboard/node_modules/picocolors/README.md",
+    "docs/conexiones_simple.md",
+    "clave supabase.md",
+    "docs/calibracion.md",
+    "Documentacion/06-frontend-dashboard.md.md",
+    "Documentacion/diagrama_conexiones_autoinver.png",
+    "PLAN_MAESTRO.md",
+    "docs/diagrama_conexiones.md",
+    "07-instrucciones-agente.md.md",
+    "README.md",
+    "docs/troubleshooting.md",
+    "Documentacion/05-backend-supabase.md.md",
+    "Documentacion/04-gateway-estacion-codigo.md.md",
+    "Documentacion/03-nodo-autoinver-codigo.md.md",
+    "Documentacion/02-protocolo-comunicacion.md.md",
+    "Documentacion/01-hardware-y-conexiones.md.md",
+    "Documentacion/00-contexto-y-mvp.md.md"
+  ]
+}

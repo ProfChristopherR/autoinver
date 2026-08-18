@@ -1,0 +1,1123 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Autoinver Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2.39.0/dist/umd/supabase.min.js"></script>
+  <style>
+    :root {
+      --bg-primary: #0b0f19;
+      --bg-secondary: #111827;
+      --bg-card: rgba(17, 24, 39, 0.7);
+      --bg-card-hover: rgba(17, 24, 39, 0.9);
+      --border-color: rgba(255,255,255,0.06);
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-green: #10b981;
+      --accent-blue: #3b82f6;
+      --accent-amber: #f59e0b;
+      --accent-red: #ef4444;
+      --accent-cyan: #06b6d4;
+      --accent-purple: #8b5cf6;
+      --gradient-green: linear-gradient(135deg, #10b981, #059669);
+      --gradient-blue: linear-gradient(135deg, #3b82f6, #2563eb);
+      --gradient-amber: linear-gradient(135deg, #f59e0b, #d97706);
+      --gradient-red: linear-gradient(135deg, #ef4444, #dc2626);
+      --shadow-glow-green: 0 0 20px rgba(16, 185, 129, 0.15);
+      --shadow-glow-blue: 0 0 20px rgba(59, 130, 246, 0.15);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Animated background */
+    .bg-grid {
+      position: fixed;
+      inset: 0;
+      background-image: 
+        radial-gradient(circle at 1px 1px, rgba(255,255,255,0.03) 1px, transparent 0);
+      background-size: 32px 32px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .bg-glow {
+      position: fixed;
+      width: 600px;
+      height: 600px;
+      border-radius: 50%;
+      filter: blur(120px);
+      opacity: 0.08;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .bg-glow-1 { top: -200px; left: -200px; background: var(--accent-green); }
+    .bg-glow-2 { bottom: -200px; right: -200px; background: var(--accent-blue); }
+
+    /* Layout */
+    .app {
+      position: relative;
+      z-index: 1;
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: var(--gradient-green);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      box-shadow: var(--shadow-glow-green);
+    }
+
+    .brand-text h1 {
+      font-size: 1.5rem;
+      font-weight: 800;
+      background: linear-gradient(90deg, #10b981, #3b82f6, #8b5cf6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .brand-text p {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .connection-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      padding: 8px 16px;
+      border-radius: 10px;
+      font-size: 0.85rem;
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      position: relative;
+    }
+    .pulse-dot::after {
+      content: '';
+      position: absolute;
+      inset: -4px;
+      border-radius: 50%;
+      border: 2px solid var(--accent-green);
+      animation: pulse-ring 2s infinite;
+    }
+    .pulse-dot.offline { background: var(--accent-red); }
+    .pulse-dot.offline::after { border-color: var(--accent-red); animation: none; }
+    .pulse-dot.warning { background: var(--accent-amber); }
+    .pulse-dot.warning::after { border-color: var(--accent-amber); }
+
+    @keyframes pulse-ring {
+      0% { transform: scale(1); opacity: 1; }
+      100% { transform: scale(2.5); opacity: 0; }
+    }
+
+    .btn {
+      padding: 10px 18px;
+      border-radius: 10px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-card);
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn:hover {
+      background: var(--bg-card-hover);
+      border-color: rgba(255,255,255,0.12);
+      transform: translateY(-1px);
+    }
+    .btn-primary {
+      background: var(--gradient-green);
+      border: none;
+      color: white;
+      box-shadow: var(--shadow-glow-green);
+    }
+    .btn-primary:hover {
+      box-shadow: 0 0 30px rgba(16, 185, 129, 0.25);
+    }
+    .btn-danger {
+      background: var(--gradient-red);
+      border: none;
+      color: white;
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* Cards Grid */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .metric-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 20px;
+      backdrop-filter: blur(10px);
+      transition: all 0.3s;
+      position: relative;
+      overflow: hidden;
+    }
+    .metric-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--card-accent, var(--accent-green));
+      opacity: 0.6;
+    }
+    .metric-card:hover {
+      transform: translateY(-3px);
+      border-color: rgba(255,255,255,0.1);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+
+    .metric-card .label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .metric-card .value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+    }
+    .metric-card .unit {
+      font-size: 0.9rem;
+      font-weight: 400;
+      color: var(--text-secondary);
+      margin-left: 4px;
+    }
+    .metric-card .meta {
+      margin-top: 8px;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .metric-card .sparkline {
+      margin-top: 12px;
+      height: 30px;
+    }
+
+    .trend { font-size: 0.75rem; font-weight: 600; }
+    .trend-up { color: var(--accent-red); }
+    .trend-down { color: var(--accent-green); }
+
+    /* Charts Section */
+    .section {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 24px;
+      backdrop-filter: blur(10px);
+    }
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .section-title {
+      font-size: 1rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .section-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .time-selector {
+      display: flex;
+      gap: 4px;
+      background: var(--bg-primary);
+      padding: 4px;
+      border-radius: 8px;
+    }
+    .time-selector button {
+      padding: 6px 12px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: 0.8rem;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .time-selector button.active {
+      background: var(--bg-card);
+      color: var(--text-primary);
+    }
+
+    .chart-container {
+      position: relative;
+      height: 300px;
+    }
+
+    /* Controls Panel */
+    .controls-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+
+    .control-group {
+      background: var(--bg-primary);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .control-group h4 {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .control-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    /* Toggle Switch */
+    .toggle-switch {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+    }
+    .toggle-switch input { display: none; }
+    .toggle-slider {
+      width: 44px;
+      height: 24px;
+      background: var(--bg-secondary);
+      border-radius: 12px;
+      position: relative;
+      transition: background 0.3s;
+      border: 1px solid var(--border-color);
+    }
+    .toggle-slider::after {
+      content: '';
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      background: white;
+      border-radius: 50%;
+      top: 2px;
+      left: 2px;
+      transition: transform 0.3s;
+    }
+    .toggle-switch input:checked + .toggle-slider {
+      background: var(--accent-green);
+      border-color: var(--accent-green);
+    }
+    .toggle-switch input:checked + .toggle-slider::after {
+      transform: translateX(20px);
+    }
+
+    /* Slider */
+    .slider-control {
+      width: 100%;
+      margin-top: 8px;
+    }
+    .slider-control input[type="range"] {
+      width: 100%;
+      -webkit-appearance: none;
+      height: 6px;
+      border-radius: 3px;
+      background: var(--bg-secondary);
+      outline: none;
+    }
+    .slider-control input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--accent-blue);
+      cursor: pointer;
+      box-shadow: 0 0 10px rgba(59,130,246,0.3);
+    }
+    .slider-value {
+      text-align: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    /* Events Timeline */
+    .timeline {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .timeline-item {
+      display: flex;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .timeline-item:last-child { border-bottom: none; }
+    .timeline-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-top: 4px;
+      flex-shrink: 0;
+    }
+    .timeline-content {
+      flex: 1;
+    }
+    .timeline-time {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .timeline-text {
+      font-size: 0.9rem;
+      margin-top: 2px;
+    }
+    .timeline-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-left: 8px;
+    }
+    .badge-auto { background: rgba(16,185,129,0.15); color: var(--accent-green); }
+    .badge-manual { background: rgba(59,130,246,0.15); color: var(--accent-blue); }
+    .badge-alert { background: rgba(239,68,68,0.15); color: var(--accent-red); }
+
+    /* Toast */
+    .toast-container {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .toast {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 14px 18px;
+      min-width: 280px;
+      backdrop-filter: blur(20px);
+      animation: toast-in 0.3s ease-out;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .toast.success { border-left: 3px solid var(--accent-green); }
+    .toast.error { border-left: 3px solid var(--accent-red); }
+    .toast.info { border-left: 3px solid var(--accent-blue); }
+    @keyframes toast-in {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
+    /* Footer */
+    .footer {
+      text-align: center;
+      padding: 20px;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .app { padding: 16px; }
+      .header { flex-direction: column; align-items: flex-start; }
+      .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+      .metric-card .value { font-size: 1.5rem; }
+      .chart-container { height: 220px; }
+    }
+    @media (max-width: 480px) {
+      .metrics-grid { grid-template-columns: 1fr; }
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+    /* Loading */
+    .loading-shimmer {
+      background: linear-gradient(90deg, var(--bg-secondary) 25%, rgba(255,255,255,0.05) 50%, var(--bg-secondary) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: 8px;
+      height: 20px;
+    }
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="brand">
+        <div class="brand-icon">🌿</div>
+        <div class="brand-text">
+          <h1>Autoinver</h1>
+          <p>Smart Greenhouse Dashboard v2.0</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div class="connection-status" id="connStatus">
+          <span class="pulse-dot" id="connDot"></span>
+          <span id="connText">Conectando...</span>
+        </div>
+        <button class="btn" onclick="refreshData()">🔄 Actualizar</button>
+        <button class="btn btn-primary" onclick="showSettings()">⚙️ Config</button>
+      </div>
+    </header>
+
+    <!-- Metrics Cards -->
+    <div class="metrics-grid" id="metricsGrid">
+      <div class="metric-card" style="--card-accent: var(--accent-amber);">
+        <div class="label">🌡️ Temperatura</div>
+        <div class="value" id="valTemp">--<span class="unit">°C</span></div>
+        <div class="meta">
+          <span class="trend" id="trendTemp"></span>
+          <span id="metaTemp">Esperando datos...</span>
+        </div>
+      </div>
+      <div class="metric-card" style="--card-accent: var(--accent-blue);">
+        <div class="label">💧 Humedad</div>
+        <div class="value" id="valHum">--<span class="unit">%</span></div>
+        <div class="meta" id="metaHum">Esperando datos...</div>
+      </div>
+      <div class="metric-card" style="--card-accent: var(--accent-green);">
+        <div class="label">🌱 Suelo</div>
+        <div class="value" id="valSoil">--<span class="unit">%</span></div>
+        <div class="meta" id="metaSoil">Esperando datos...</div>
+      </div>
+      <div class="metric-card" style="--card-accent: var(--accent-cyan);">
+        <div class="label">🚰 Nivel Agua</div>
+        <div class="value" id="valWater">--<span class="unit">%</span></div>
+        <div class="meta" id="metaWater">Esperando datos...</div>
+      </div>
+      <div class="metric-card" style="--card-accent: var(--accent-red);">
+        <div class="label">🔌 Bomba</div>
+        <div class="value" id="valPump" style="font-size:1.3rem;">--</div>
+        <div class="meta" id="metaPump">Esperando datos...</div>
+      </div>
+      <div class="metric-card" style="--card-accent: var(--accent-purple);">
+        <div class="label">📶 Señal LoRa</div>
+        <div class="value" id="valRSSI">--<span class="unit">dBm</span></div>
+        <div class="meta" id="metaRSSI">Esperando datos...</div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="section">
+      <div class="section-header">
+        <h3 class="section-title">📈 Historial de Sensores</h3>
+        <div class="time-selector">
+          <button class="active" onclick="setTimeRange('1h')">1h</button>
+          <button onclick="setTimeRange('6h')">6h</button>
+          <button onclick="setTimeRange('24h')">24h</button>
+          <button onclick="setTimeRange('7d')">7d</button>
+        </div>
+      </div>
+      <div class="chart-container">
+        <canvas id="mainChart"></canvas>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 16px;">
+      <!-- Controls -->
+      <div class="section">
+        <div class="section-header">
+          <h3 class="section-title">🎮 Control Manual</h3>
+        </div>
+        <div class="controls-grid">
+          <div class="control-group">
+            <h4>💧 Bomba de Riego</h4>
+            <div class="control-row">
+              <button class="btn btn-primary" id="btnPumpOn" onclick="sendCommand('BOMBA', '1')">Encender</button>
+              <button class="btn btn-danger" id="btnPumpOff" onclick="sendCommand('BOMBA', '0')">Apagar</button>
+            </div>
+            <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
+              <span class="toggle-switch">
+                <input type="checkbox" id="autoMode" checked onchange="sendCommand('MODE', this.checked ? 'AUTO' : 'MANUAL')">
+                <span class="toggle-slider"></span>
+              </span>
+              <span style="font-size:0.85rem; color:var(--text-secondary);">Modo Automático</span>
+            </div>
+          </div>
+          <div class="control-group">
+            <h4>🪟 Compuerta A</h4>
+            <div class="slider-control">
+              <input type="range" id="sliderS1" min="0" max="90" value="0" oninput="updateSlider('S1', this.value)" onchange="sendCommand('S1', this.value)">
+              <div class="slider-value" id="valS1">0°</div>
+            </div>
+          </div>
+          <div class="control-group">
+            <h4>🪟 Compuerta B</h4>
+            <div class="slider-control">
+              <input type="range" id="sliderS2" min="0" max="90" value="0" oninput="updateSlider('S2', this.value)" onchange="sendCommand('S2', this.value)">
+              <div class="slider-value" id="valS2">0°</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Events -->
+      <div class="section">
+        <div class="section-header">
+          <h3 class="section-title">📋 Eventos Recientes</h3>
+          <button class="btn" onclick="loadEvents()">🔄</button>
+        </div>
+        <div class="timeline" id="eventsTimeline">
+          <div style="text-align:center; padding:20px; color:var(--text-muted);">Cargando eventos...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      Autoinver v2.0 · IoT Agriculture · Conectado a <span id="footerSupabase">Supabase</span>
+    </footer>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script>
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - COMPLETAR CON TUS CREDENCIALES SUPABASE
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // Estas variables se reemplazan en build time por Vite desde .env (VITE_*).
+    // En el repo solo quedan placeholders; ver .env.example.
+    const SUPABASE_URL = '%VITE_SUPABASE_URL%';
+    const SUPABASE_KEY = '%VITE_SUPABASE_ANON_KEY%';
+    
+    // URL del gateway local (fallback)
+    const GATEWAY_URL = 'http://192.168.1.100';  // Actualizar con IP del gateway
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // ESTADO GLOBAL
+    // ═══════════════════════════════════════════════════════════════════════════════
+    let supabase = null;
+    let mainChart = null;
+    let lastData = null;
+    let timeRange = '1h';
+    let isConnected = false;
+    let realtimeSubscription = null;
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // INICIALIZACIÓN
+    // ═══════════════════════════════════════════════════════════════════════════════
+    document.addEventListener('DOMContentLoaded', () => {
+      initSupabase();
+      initChart();
+      refreshData();
+      loadEvents();
+      
+      // Auto-refresh cada 10 segundos
+      setInterval(refreshData, 10000);
+      setInterval(loadEvents, 30000);
+    });
+
+    function initSupabase() {
+      if (typeof supabaseLib === 'undefined' || SUPABASE_URL.includes('%VITE_')) {
+        showToast('⚠️ Configura tus credenciales de Supabase', 'warning');
+        updateConnectionStatus(false, 'Sin configurar');
+        return;
+      }
+      supabase = supabaseLib.createClient(SUPABASE_URL, SUPABASE_KEY);
+      
+      // Suscribirse a cambios en tiempo real
+      realtimeSubscription = supabase
+        .channel('autoinver_changes')
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'autoinver_data'
+        }, (payload) => {
+          updateDashboard(payload.new);
+        })
+        .subscribe((status) => {
+          const connected = status === 'SUBSCRIBED';
+          updateConnectionStatus(connected, connected ? 'En vivo' : 'Desconectado');
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // GRÁFICO PRINCIPAL
+    // ═══════════════════════════════════════════════════════════════════════════════
+    function initChart() {
+      const ctx = document.getElementById('mainChart').getContext('2d');
+      
+      Chart.defaults.color = '#94a3b8';
+      Chart.defaults.borderColor = 'rgba(255,255,255,0.06)';
+      
+      mainChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [
+            {
+              label: 'Temperatura (°C)',
+              data: [],
+              borderColor: '#f59e0b',
+              backgroundColor: 'rgba(245,158,11,0.1)',
+              tension: 0.4,
+              fill: true,
+              pointRadius: 0,
+              pointHoverRadius: 6
+            },
+            {
+              label: 'Humedad (%)',
+              data: [],
+              borderColor: '#3b82f6',
+              backgroundColor: 'rgba(59,130,246,0.1)',
+              tension: 0.4,
+              fill: true,
+              pointRadius: 0,
+              pointHoverRadius: 6
+            },
+            {
+              label: 'Suelo (%)',
+              data: [],
+              borderColor: '#10b981',
+              backgroundColor: 'rgba(16,185,129,0.1)',
+              tension: 0.4,
+              fill: true,
+              pointRadius: 0,
+              pointHoverRadius: 6
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: {
+              position: 'top',
+              labels: { usePointStyle: true, padding: 20 }
+            },
+            tooltip: {
+              backgroundColor: 'rgba(15, 23, 42, 0.95)',
+              titleColor: '#f1f5f9',
+              bodyColor: '#94a3b8',
+              borderColor: 'rgba(255,255,255,0.1)',
+              borderWidth: 1,
+              padding: 12,
+              cornerRadius: 8
+            }
+          },
+          scales: {
+            x: {
+              type: 'time',
+              time: {
+                unit: 'minute',
+                displayFormats: { minute: 'HH:mm', hour: 'HH:mm' }
+              },
+              grid: { display: false }
+            },
+            y: {
+              beginAtZero: true,
+              max: 100,
+              grid: { color: 'rgba(255,255,255,0.04)' }
+            }
+          }
+        }
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // OBTENER DATOS
+    // ═══════════════════════════════════════════════════════════════════════════════
+    async function refreshData() {
+      if (!supabase) {
+        // Fallback: intentar desde gateway local
+        tryFetchFromGateway();
+        return;
+      }
+
+      try {
+        const since = getTimeRangeDate();
+        
+        const { data, error } = await supabase
+          .from('autoinver_data')
+          .select('*')
+          .gte('created_at', since.toISOString())
+          .order('created_at', { ascending: true });
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          const latest = data[data.length - 1];
+          updateDashboard(latest);
+          updateChart(data);
+          updateConnectionStatus(true, 'Conectado');
+        }
+      } catch (err) {
+        console.error('Error fetching data:', err);
+        updateConnectionStatus(false, 'Error de conexión');
+      }
+    }
+
+    async function tryFetchFromGateway() {
+      try {
+        const res = await fetch(`${GATEWAY_URL}/api/v1/data`, { mode: 'cors', timeout: 3000 });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.has_data) {
+            updateDashboard({
+              temp_c: data.temp_c,
+              hum_pct: data.hum_pct,
+              soil_pct: data.soil,
+              water_pct: data.water,
+              pump_state: data.pump,
+              servo1_pos: data.servo1,
+              servo2_pos: data.servo2,
+              rssi: data.rssi,
+              mode: data.mode
+            });
+            updateConnectionStatus(true, 'Gateway local');
+          }
+        }
+      } catch (e) {
+        // Silencioso - no hay conexión
+      }
+    }
+
+    function getTimeRangeDate() {
+      const now = new Date();
+      switch(timeRange) {
+        case '1h': return new Date(now - 60 * 60 * 1000);
+        case '6h': return new Date(now - 6 * 60 * 60 * 1000);
+        case '24h': return new Date(now - 24 * 60 * 60 * 1000);
+        case '7d': return new Date(now - 7 * 24 * 60 * 60 * 1000);
+        default: return new Date(now - 60 * 60 * 1000);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // ACTUALIZAR UI
+    // ═══════════════════════════════════════════════════════════════════════════════
+    function updateDashboard(data) {
+      lastData = data;
+
+      // Temperatura
+      if (data.temp_c !== null && data.temp_c !== undefined) {
+        document.getElementById('valTemp').innerHTML = data.temp_c.toFixed(1) + '<span class="unit">°C</span>';
+        document.getElementById('metaTemp').textContent = data.temp_c > 30 ? '🔥 Alta' : data.temp_c < 15 ? '❄️ Baja' : '✅ Normal';
+        const trendEl = document.getElementById('trendTemp');
+        if (lastData && lastData.temp_c !== undefined) {
+          const diff = data.temp_c - lastData.temp_c;
+          trendEl.textContent = diff > 0 ? '▲ +' + diff.toFixed(1) : diff < 0 ? '▼ ' + diff.toFixed(1) : '●';
+          trendEl.className = 'trend ' + (diff > 0 ? 'trend-up' : diff < 0 ? 'trend-down' : '');
+        }
+      }
+
+      // Humedad
+      if (data.hum_pct !== null) {
+        document.getElementById('valHum').innerHTML = data.hum_pct.toFixed(0) + '<span class="unit">%</span>';
+        document.getElementById('metaHum').textContent = data.hum_pct < 40 ? 'Seco' : data.hum_pct > 80 ? 'Húmedo' : 'Óptimo';
+      }
+
+      // Suelo
+      if (data.soil_pct !== null) {
+        document.getElementById('valSoil').innerHTML = data.soil_pct.toFixed(0) + '<span class="unit">%</span>';
+        document.getElementById('metaSoil').textContent = data.soil_pct < 30 ? '🚨 Regar urgente' : data.soil_pct < 50 ? '💧 Requiere riego' : '✅ Bien hidratado';
+      }
+
+      // Agua
+      if (data.water_pct !== null) {
+        document.getElementById('valWater').innerHTML = data.water_pct.toFixed(0) + '<span class="unit">%</span>';
+        document.getElementById('metaWater').textContent = data.water_pct < 20 ? '⚠️ Tanque bajo' : '✅ Nivel OK';
+      }
+
+      // Bomba
+      const pumpEl = document.getElementById('valPump');
+      pumpEl.textContent = data.pump_state ? '🔴 ENCENDIDA' : '⚪ APAGADA';
+      pumpEl.style.color = data.pump_state ? 'var(--accent-red)' : 'var(--text-secondary)';
+      document.getElementById('metaPump').textContent = data.pump_state ? 'Riego activo' : 'En espera';
+
+      // RSSI
+      if (data.rssi !== null) {
+        document.getElementById('valRSSI').innerHTML = data.rssi + '<span class="unit">dBm</span>';
+        const quality = data.rssi > -70 ? 'Excelente' : data.rssi > -90 ? 'Buena' : data.rssi > -100 ? 'Débil' : 'Crítica';
+        document.getElementById('metaRSSI').textContent = 'Señal ' + quality;
+      }
+
+      // Actualizar sliders si hay datos de servos
+      if (data.servo1_pos !== undefined) {
+        document.getElementById('sliderS1').value = data.servo1_pos;
+        document.getElementById('valS1').textContent = data.servo1_pos + '°';
+      }
+      if (data.servo2_pos !== undefined) {
+        document.getElementById('sliderS2').value = data.servo2_pos;
+        document.getElementById('valS2').textContent = data.servo2_pos + '°';
+      }
+
+      // Modo auto
+      if (data.mode) {
+        document.getElementById('autoMode').checked = (data.mode === 'AUTO');
+      }
+    }
+
+    function updateChart(data) {
+      if (!mainChart || !data || data.length === 0) return;
+
+      const labels = data.map(d => new Date(d.created_at));
+      const temps = data.map(d => d.temp_c);
+      const hums = data.map(d => d.hum_pct);
+      const soils = data.map(d => d.soil_pct);
+
+      mainChart.data.labels = labels;
+      mainChart.data.datasets[0].data = temps;
+      mainChart.data.datasets[1].data = hums;
+      mainChart.data.datasets[2].data = soils;
+      mainChart.update('none');
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // EVENTOS
+    // ═══════════════════════════════════════════════════════════════════════════════
+    async function loadEvents() {
+      if (!supabase) return;
+      
+      try {
+        const { data, error } = await supabase
+          .from('autoinver_events')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(20);
+
+        if (error) throw error;
+
+        const container = document.getElementById('eventsTimeline');
+        if (!data || data.length === 0) {
+          container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">Sin eventos recientes</div>';
+          return;
+        }
+
+        container.innerHTML = data.map(ev => {
+          const color = ev.event_type.includes('ALERT') ? 'var(--accent-red)' :
+                        ev.event_type.includes('PUMP_ON') ? 'var(--accent-blue)' :
+                        ev.event_type.includes('PUMP_OFF') ? 'var(--text-muted)' :
+                        ev.event_type.includes('VENT') ? 'var(--accent-green)' :
+                        'var(--accent-amber)';
+          
+          const badgeClass = ev.source === 'AUTO' ? 'badge-auto' : 
+                             ev.source === 'MANUAL' ? 'badge-manual' : 'badge-alert';
+          
+          const time = new Date(ev.created_at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+          
+          return `
+            <div class="timeline-item">
+              <div class="timeline-dot" style="background:${color}"></div>
+              <div class="timeline-content">
+                <div class="timeline-time">${time}</div>
+                <div class="timeline-text">
+                  ${formatEventType(ev.event_type)}
+                  <span class="timeline-badge ${badgeClass}">${ev.source}</span>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      } catch (err) {
+        console.error('Error loading events:', err);
+      }
+    }
+
+    function formatEventType(type) {
+      const map = {
+        'PUMP_ON': '💧 Bomba encendida',
+        'PUMP_OFF': '🔌 Bomba apagada',
+        'VENT1_OPEN': '🪟 Compuerta A abierta',
+        'VENT1_CLOSE': '🪟 Compuerta A cerrada',
+        'VENT2_OPEN': '🪟 Compuerta B abierta',
+        'VENT2_CLOSE': '🪟 Compuerta B cerrada',
+        'MODE_CHANGE': '⚙️ Cambio de modo',
+        'ALERT_LOW_WATER': '🚨 Alerta: agua baja',
+        'ALERT_HIGH_TEMP': '🌡️ Alerta: temperatura alta'
+      };
+      return map[type] || type;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // ENVÍO DE COMANDOS
+    // ═══════════════════════════════════════════════════════════════════════════════
+    async function sendCommand(action, value) {
+      showToast(`Enviando: ${action} = ${value}...`, 'info');
+      
+      // Intentar via Supabase
+      if (supabase) {
+        try {
+          const { error } = await supabase
+            .from('commands_queue')
+            .insert([{
+              device_id: 'AUTOINVER',
+              action: action,
+              value: value.toString(),
+              requested_by: 'dashboard'
+            }]);
+          
+          if (error) throw error;
+          showToast(`✅ Comando ${action} enviado a la cola`, 'success');
+          return;
+        } catch (err) {
+          console.error('Supabase command error:', err);
+        }
+      }
+      
+      // Fallback: enviar directo al gateway
+      try {
+        const formData = new URLSearchParams();
+        formData.append('act', action);
+        formData.append('val', value);
+        
+        const res = await fetch(`${GATEWAY_URL}/api/v1/command`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: formData
+        });
+        
+        if (res.ok) {
+          showToast(`✅ Comando enviado al gateway`, 'success');
+        } else {
+          throw new Error('Gateway error');
+        }
+      } catch (err) {
+        showToast('❌ No se pudo enviar el comando', 'error');
+      }
+    }
+
+    function updateSlider(id, value) {
+      document.getElementById('val' + id).textContent = value + '°';
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // UTILIDADES
+    // ═══════════════════════════════════════════════════════════════════════════════
+    function updateConnectionStatus(connected, text) {
+      const dot = document.getElementById('connDot');
+      const txt = document.getElementById('connText');
+      
+      isConnected = connected;
+      dot.className = 'pulse-dot' + (connected ? '' : ' offline');
+      txt.textContent = text;
+    }
+
+    function setTimeRange(range) {
+      timeRange = range;
+      document.querySelectorAll('.time-selector button').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent === range.replace('h','h').replace('d','d'));
+      });
+      refreshData();
+    }
+
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      toast.textContent = message;
+      container.appendChild(toast);
+      
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateX(100%)';
+        setTimeout(() => toast.remove(), 300);
+      }, 4000);
+    }
+
+    function showSettings() {
+      showToast('⚙️ Configuración: Edita SUPABASE_URL y SUPABASE_KEY en el código', 'info');
+    }
+  </script>
+</body>
+</html>
