@@ -70,7 +70,7 @@ const char* SUPABASE_TABLE = "autoinver_data";
 // Intervalos
 #define NTP_SYNC_MS     300000   // 5 minutos
 #define SUPABASE_SEND_MS 30000   // 30 segundos
-#define CMD_POLL_MS     15000    // 15 segundos poll comandos
+#define CMD_POLL_MS     2000     // 2 segundos poll comandos (respuesta rapida a bomba/actuadores)
 #define DISPLAY_UPD_MS  1000     // 1 segundo
 #define WIFI_RETRY_MS   30000    // 30 segundos reintento WiFi
 
