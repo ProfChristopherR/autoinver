@@ -13,6 +13,7 @@
 #include <Wire.h>
 #include <Adafruit_SSD1306.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ESP32Time.h>
@@ -20,6 +21,8 @@
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
 #include <NTPClient.h>
+#include <DNSServer.h>
+#include <Preferences.h>
 #include <WiFiUdp.h>
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -40,10 +43,22 @@
 #define SCREEN_H    64
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CONFIGURACIÓN WiFi
+// CONFIGURACIÓN WiFi & PORTAL CAUTIVO
 // ═══════════════════════════════════════════════════════════════════════════════
-const char* WIFI_SSID     = "geogo_IoT";
-const char* WIFI_PASS     = "2iot2025";
+// Red 1: Prioridad máxima nativa
+const char* WIFI_SSID_1       = "geogo_IoT";
+const char* WIFI_PASS_1       = "2iot2025";
+
+// Red 2: Segunda red de respaldo fija (Hotspot móvil)
+const char* WIFI_SSID_2       = "amarox_555";
+const char* WIFI_PASS_2       = "queteimporta123";
+
+// Alias de compatibilidad
+const char* WIFI_SSID_DEFAULT = WIFI_SSID_1;
+const char* WIFI_PASS_DEFAULT = WIFI_PASS_1;
+
+const char* AP_SSID           = "Autoinver_Gateway_AP";
+const char* AP_PASS           = "";  // Red abierta para facilitar acceso al portal cautivo
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFIGURACIÓN SUPABASE (COMPLETAR CON TUS CREDENCIALES)
@@ -70,7 +85,7 @@ const char* SUPABASE_TABLE = "autoinver_data";
 // Intervalos
 #define NTP_SYNC_MS     300000   // 5 minutos
 #define SUPABASE_SEND_MS 30000   // 30 segundos
-#define CMD_POLL_MS     2000     // 2 segundos poll comandos (respuesta rapida a bomba/actuadores)
+#define CMD_POLL_MS     2000     // 2 segundos poll comandos (respuesta rápida desde dashboard)
 #define DISPLAY_UPD_MS  1000     // 1 segundo
 #define WIFI_RETRY_MS   30000    // 30 segundos reintento WiFi
 
@@ -135,12 +150,24 @@ int           g_totalTxCommands = 0;
 int           g_bufferLines = 0;
 bool          g_wifiConnected = false;
 bool          g_ntpSynced = false;
+bool          g_apMode = false;
+String        g_configuredSSID = "";
+String        g_configuredPass = "";
+String        g_adminUser = "admin";
+String        g_adminPass = "admin";
+String        g_currentConnectedSSID = "";
+
+DNSServer     g_dnsServer;
+const byte    DNS_PORT = 53;
+IPAddress     g_apIP(192, 168, 4, 1);
+IPAddress     g_apNetmask(255, 255, 255, 0);
+Preferences   g_prefs;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DECLARACIONES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Init
+// Init & WiFi Management
 void initDisplay();
 void initLoRa();
 void initWiFi();
@@ -148,6 +175,13 @@ void initSPIFFS();
 void initWebServer();
 void initNTP();
 void showBootScreen();
+void loadConfig();
+void saveNetworkConfig(const String& ssid, const String& pass);
+void saveAdminConfig(const String& user, const String& pass);
+bool conectarWiFi(const char* ssid, const char* pass, int maxIntentos);
+void conectarWiFiCiclo();
+void iniciarPortalCautivo();
+void detenerPortalCautivo();
 
 // LoRa
 void procesarPaqueteLoRa();
@@ -158,12 +192,14 @@ void parsearTelemetria(const String& payload);
 // Supabase / Cloud
 bool enviarSupabaseDirect(const String& jsonPayload);
 bool enviarSupabaseBatch(String* lineas, int count);
+bool enviarTelemetriaActualSupabase();
 void flushBufferToSupabase();
 void guardarEnBuffer(const String& jsonLine);
 void pollComandosPendientes();
 void ackComando(long id);
 
-// Web Server
+// Web Server & Portal Cautivo
+void sendCorsHeaders();
 void handleRoot();
 void handleApiV1Status();
 void handleApiV1Data();
@@ -171,11 +207,23 @@ void handleApiV1Command();
 void handleApiV1History();
 void handleDashboard();
 String generateDashboardHTML();
+bool isPortalAuthenticated();
+void handleCaptivePortalRedirect();
+void handleNotFound();
+void handlePortal();
+void handlePortalLogin();
+void handlePortalLogout();
+void handlePortalScan();
+void handlePortalSave();
+void handlePortalAdminChange();
+void handlePortalReboot();
+String generatePortalHTML(bool auth, const String& err = "", const String& succ = "");
 
 // Display
 void actualizarDisplay();
 void mostrarBoot();
-void mostrarWiFiStatus(int intento);
+void mostrarWiFiStatus(const char* ssid, int intento);
+void mostrarAPStatus();
 void mostrarEstadoOK();
 void mostrarError(const char* msg);
 
@@ -218,17 +266,22 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
+  // ── 0. Procesar peticiones DNS en modo Portal Cautivo ──
+  if (g_apMode) {
+    g_dnsServer.processNextRequest();
+  }
+
   // ── 1. Recibir paquetes LoRa ──
   int pktSize = LoRa.parsePacket();
   if (pktSize) {
     procesarPaqueteLoRa();
   }
 
-  // ── 2. Reconexión WiFi automática ──
-  if (!g_wifiConnected && (now - g_lastWifiRetry > WIFI_RETRY_MS)) {
+  // ── 2. Reconexión WiFi automática (prioridad geogo_IoT primero) ──
+  if (!g_apMode && !g_wifiConnected && (now - g_lastWifiRetry > WIFI_RETRY_MS)) {
     g_lastWifiRetry = now;
-    Serial.println(F("[WIFI] Reintentando conexión..."));
-    WiFi.reconnect();
+    Serial.println(F("[WIFI] Reintentando conexión (prioridad geogo_IoT)..."));
+    conectarWiFiCiclo();
   }
   
   if (WiFi.status() == WL_CONNECTED && !g_wifiConnected) {
@@ -241,47 +294,78 @@ void loop() {
     g_connState = CONN_NONE;
   }
 
-  // ── 3. Sincronización NTP ──
-  if (g_wifiConnected && (now - g_lastNtpSync > NTP_SYNC_MS)) {
+  // ── 3. Sincronización NTP (reintento cada 10s si aún no sincroniza, o cada 5min si ya sincronizó) ──
+  unsigned long ntpInterval = g_ntpSynced ? NTP_SYNC_MS : 10000;
+  if (g_wifiConnected && (now - g_lastNtpSync > ntpInterval)) {
     g_lastNtpSync = now;
     if (timeClient.update()) {
       rtc.setTime(timeClient.getEpochTime());
       g_ntpSynced = true;
-      Serial.println(F("[NTP] Hora sincronizada"));
+      Serial.println(F("[NTP] ✅ Hora sincronizada con éxito"));
+    } else {
+      Serial.println(F("[NTP] ⚠️ Intento de sincronización falló (esperando respuesta NTP...)"));
     }
   }
 
-  // ── 4. Enviar datos a Supabase cada 30s ──
-  if (g_wifiConnected && g_ntpSynced && (now - g_lastSupabaseSend > SUPABASE_SEND_MS)) {
+  // ── 4. Enviar datos a Supabase cada 30s con DIAGNÓSTICO COMPLETO ──
+  if (now - g_lastSupabaseSend > SUPABASE_SEND_MS) {
     g_lastSupabaseSend = now;
-    flushBufferToSupabase();
-    
-    // También enviar el dato actual si es reciente (< 60s)
-    if (g_node.valid && (now - g_lastPacketMs < 60000)) {
-      StaticJsonDocument<512> doc;
-      doc["device_id"] = "AUTOINVER";
-      doc["temp_c"] = g_node.temp;
-      doc["hum_pct"] = g_node.hum;
-      doc["soil_adc"] = g_node.soilADC;
-      doc["soil_pct"] = g_node.soilPct;
-      doc["water_adc"] = g_node.waterADC;
-      doc["water_pct"] = g_node.waterPct;
-      doc["servo1_pos"] = g_node.s1;
-      doc["servo2_pos"] = g_node.s2;
-      doc["pump_state"] = g_node.pump;
-      doc["rssi"] = g_node.rssi;
-      doc["raw_payload"] = "live";
-      
-      String jsonStr;
-      serializeJson(doc, jsonStr);
-      if (!enviarSupabaseDirect(jsonStr)) {
-        guardarEnBuffer(jsonStr);
+
+    Serial.println(F("\n══════════ [DIAGNOSTICO UPLINK SUPABASE] ══════════"));
+    Serial.print(F(" WiFi Conectado : "));
+    if (g_wifiConnected) {
+      Serial.print(F("SI -> IP: ")); Serial.println(WiFi.localIP());
+    } else {
+      Serial.println(F("NO (Modo Desconectado / AP)"));
+    }
+
+    Serial.print(F(" NTP Sincronizado: "));
+    Serial.println(g_ntpSynced ? F("SI") : F("NO (No impide enviar a Supabase)"));
+
+    Serial.print(F(" Paquete LoRa Nodo: "));
+    if (g_node.valid) {
+      unsigned long segs = (now - g_lastPacketMs) / 1000;
+      Serial.print(F("SI -> Recibido hace ")); Serial.print(segs); Serial.println(F(" s"));
+      Serial.print(F("    [T:")); Serial.print(g_node.temp, 1);
+      Serial.print(F("C | H:")); Serial.print(g_node.hum, 1);
+      Serial.print(F("% | Suelo:")); Serial.print(g_node.soilPct, 0);
+      Serial.print(F("% | Agua:")); Serial.print(g_node.waterPct, 0);
+      Serial.print(F("% | Bomba:")); Serial.print(g_node.pump ? F("ON") : F("OFF"));
+      Serial.print(F(" | RSSI:")); Serial.print(g_node.rssi); Serial.println(F("dBm]"));
+    } else {
+      Serial.println(F("NO (¡AUN NO SE HA RECIBIDO NINGUN PAQUETE LoRa DEL NODO!)"));
+      Serial.println(F("    -> Verifica que el Heltec Nodo este encendido y transmitiendo en 915MHz."));
+    }
+
+    Serial.print(F(" Buffer local (SPIFFS): "));
+    Serial.print(g_bufferLines); Serial.println(F(" registros"));
+
+    if (!g_wifiConnected) {
+      Serial.println(F("[SUPA] ⏸ OMITIDO: El Gateway no tiene conexion WiFi"));
+    } else {
+      // 1. Enviar buffer acumulado si existe
+      if (g_bufferLines > 0) {
+        Serial.println(F("[SUPA] 📦 Vaciando registros acumulados en buffer hacia Supabase..."));
+        flushBufferToSupabase();
+      }
+
+      // 2. Enviar dato actual del nodo si es reciente
+      if (g_node.valid && (now - g_lastPacketMs < 60000)) {
+        enviarTelemetriaActualSupabase();
+      } else {
+        if (!g_node.valid) {
+          Serial.println(F("[SUPA] ⏸ OMITIDO ENVIO EN VIVO: 'g_node.valid' es FALSE"));
+          Serial.println(F("       CAUSA: El Gateway todavia no ha recibido ningun dato por LoRa desde el Nodo."));
+        } else {
+          Serial.println(F("[SUPA] ⏸ OMITIDO ENVIO EN VIVO: El ultimo paquete LoRa es de hace mas de 60s"));
+        }
       }
     }
+    Serial.println(F("═══════════════════════════════════════════════════\n"));
   }
 
-  // ── 5. Poll comandos pendientes desde Supabase ──
-  if (g_wifiConnected && g_ntpSynced && (now - g_lastCmdPoll > CMD_POLL_MS)) {
+  // ── 5. Poll comandos pendientes desde Supabase (cada 5s) ──
+  if (g_wifiConnected && (now - g_lastCmdPoll > CMD_POLL_MS)) {
     g_lastCmdPoll = now;
     pollComandosPendientes();
   }
@@ -329,28 +413,236 @@ void initLoRa() {
   Serial.println(F("[OK] LoRa iniciado"));
 }
 
-void initWiFi() {
+void loadConfig() {
+  g_prefs.begin("autoinver_gw", false);
+  g_configuredSSID = g_prefs.getString("wifi_ssid", "");
+  g_configuredPass = g_prefs.getString("wifi_pass", "");
+  g_adminUser      = g_prefs.getString("adm_user", "admin");
+  g_adminPass      = g_prefs.getString("adm_pass", "admin");
+  g_prefs.end();
+
+  Serial.println(F("[CFG] Configuración cargada desde NVS"));
+  Serial.print(F("      Red secundaria: "));
+  Serial.println(g_configuredSSID.length() > 0 ? g_configuredSSID : F("(Ninguna)"));
+  Serial.print(F("      Admin User: "));
+  Serial.println(g_adminUser);
+}
+
+void saveNetworkConfig(const String& ssid, const String& pass) {
+  g_prefs.begin("autoinver_gw", false);
+  g_prefs.putString("wifi_ssid", ssid);
+  g_prefs.putString("wifi_pass", pass);
+  g_prefs.end();
+
+  g_configuredSSID = ssid;
+  g_configuredPass = pass;
+  Serial.print(F("[CFG] Red secundaria guardada en NVS: "));
+  Serial.println(ssid);
+}
+
+void saveAdminConfig(const String& user, const String& pass) {
+  g_prefs.begin("autoinver_gw", false);
+  g_prefs.putString("adm_user", user);
+  g_prefs.putString("adm_pass", pass);
+  g_prefs.end();
+
+  g_adminUser = user;
+  g_adminPass = pass;
+  Serial.println(F("[CFG] Credenciales de admin actualizadas en NVS"));
+}
+
+int     g_targetChannel = 0;
+uint8_t g_targetBSSID[6] = {0};
+bool    g_targetFound   = false;
+
+void resetearWiFiModem() {
+  esp_wifi_disconnect();
+  delay(50);
+  WiFi.mode(WIFI_OFF);
+  delay(150);
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  
-  Serial.print(F("[WIFI] Conectando a "));
-  Serial.println(WIFI_SSID);
-  
+  delay(100);
+  WiFi.setSleep(false);                 // CRÍTICO para Hotspots móviles: evita pérdida de balizas
+  esp_wifi_set_country_code("CL", true); // Habilitar canales 1 al 13 comunes en celulares
+  WiFi.setAutoReconnect(true);
+}
+
+void escanearRedes(const char* buscarSSID) {
+  resetearWiFiModem();
+  g_targetFound = false;
+
+  Serial.print(F("[SCAN] Buscando redes 2.4GHz en el aire..."));
+  int n = WiFi.scanNetworks(false, false, false, 300);
+  if (n <= 0) {
+    Serial.println(F("\n[SCAN] ⚠️ No se detectó ninguna red 2.4GHz."));
+  } else {
+    Serial.print(F(" (Se detectaron ")); Serial.print(n); Serial.println(F(" redes):"));
+    for (int i = 0; i < n; i++) {
+      String s = WiFi.SSID(i);
+      int32_t rssi = WiFi.RSSI(i);
+      int ch = WiFi.channel(i);
+      wifi_auth_mode_t auth = WiFi.encryptionType(i);
+
+      Serial.print(F("  • '")); Serial.print(s);
+      Serial.print(F("' | Ch: ")); Serial.print(ch);
+      Serial.print(F(" | Señal: ")); Serial.print(rssi); Serial.print(F("dBm | Auth: "));
+      if (auth == WIFI_AUTH_OPEN) Serial.print(F("Abierta"));
+      else if (auth == WIFI_AUTH_WPA_PSK) Serial.print(F("WPA"));
+      else if (auth == WIFI_AUTH_WPA2_PSK) Serial.print(F("WPA2"));
+      else if (auth == WIFI_AUTH_WPA_WPA2_PSK) Serial.print(F("WPA/WPA2"));
+      else if (auth == WIFI_AUTH_WPA3_PSK) Serial.print(F("WPA3 (Incompatible ESP32)"));
+      else Serial.print(F("Otro"));
+      Serial.println();
+
+      if (s == buscarSSID) {
+        g_targetFound = true;
+        g_targetChannel = ch;
+        memcpy(g_targetBSSID, WiFi.BSSID(i), 6);
+      }
+    }
+    if (g_targetFound) {
+      Serial.print(F("[SCAN] ✅ '")); Serial.print(buscarSSID);
+      Serial.print(F("' SÍ está transmitiendo en Canal ")); Serial.println(g_targetChannel);
+    } else {
+      Serial.print(F("[SCAN] ❌ '")); Serial.print(buscarSSID); Serial.println(F("' NO fue detectada en el escaneo 2.4GHz."));
+    }
+  }
+}
+
+bool conectarWiFi(const char* ssid, const char* pass, int maxIntentos) {
+  resetearWiFiModem();
+
+  // Si fue detectada en el escaneo previo, conectar directamente a su Canal y BSSID
+  if (g_targetFound && String(ssid) == WIFI_SSID_2) {
+    Serial.print(F("[WIFI] Conexión DIRIGIDA rápida a Canal "));
+    Serial.print(g_targetChannel);
+    Serial.println(F("..."));
+    WiFi.begin(ssid, pass, g_targetChannel, g_targetBSSID);
+  } else {
+    WiFi.begin(ssid, pass);
+  }
+
+  Serial.print(F("[WIFI] Conectando a '"));
+  Serial.print(ssid);
+  Serial.println(F("'..."));
+
   int intentos = 0;
-  while (WiFi.status() != WL_CONNECTED && intentos < 40) {
+  while (WiFi.status() != WL_CONNECTED && intentos < maxIntentos) {
     delay(500);
     intentos++;
-    mostrarWiFiStatus(intentos);
+    mostrarWiFiStatus(ssid, intentos);
   }
-  
-  g_wifiConnected = (WiFi.status() == WL_CONNECTED);
-  if (g_wifiConnected) {
-    g_connState = CONN_WIFI_OK;
-    Serial.print(F("[OK] WiFi conectado. IP: "));
+
+  wl_status_t st = WiFi.status();
+  if (st == WL_CONNECTED) {
+    Serial.print(F("[WIFI] ✅ Conectado con éxito a '"));
+    Serial.print(ssid);
+    Serial.print(F("' | IP: "));
     Serial.println(WiFi.localIP());
+    return true;
   } else {
-    Serial.println(F("[WARN] WiFi no conectado, operando offline"));
+    Serial.print(F("[WIFI] ❌ No conectó a '"));
+    Serial.print(ssid);
+    Serial.print(F("'. Estado: "));
+    if (st == WL_NO_SSID_AVAIL)   Serial.println(F("Red no encontrada (revisa nombre o 2.4GHz)"));
+    else if (st == WL_CONNECT_FAILED) Serial.println(F("Clave/Seguridad rechazada"));
+    else if (st == WL_DISCONNECTED)   Serial.println(F("Desconectado (Esperando IP/Auth del teléfono)"));
+    else { Serial.print(F("Código ")); Serial.println(st); }
+    return false;
   }
+}
+
+void conectarWiFiCiclo() {
+  Serial.println(F("[WIFI] Evaluando conexión con jerarquía de redes..."));
+
+  // 1. Siempre intentar primero con geogo_IoT (prioridad 1 nativa)
+  Serial.print(F("[WIFI] Prioridad 1 (geogo_IoT): "));
+  Serial.println(WIFI_SSID_1);
+
+  if (conectarWiFi(WIFI_SSID_1, WIFI_PASS_1, 15)) {
+    g_wifiConnected = true;
+    g_connState = CONN_WIFI_OK;
+    g_currentConnectedSSID = WIFI_SSID_1;
+    detenerPortalCautivo();
+    Serial.print(F("[OK] Conectado a geogo_IoT. IP: "));
+    Serial.println(WiFi.localIP());
+    return;
+  }
+
+  // 2. Si falla geogo_IoT, diagnosticar y probar el hotspot móvil (amarox_555)
+  Serial.print(F("[WIFI] Prioridad 2 (Hotspot móvil): "));
+  Serial.println(WIFI_SSID_2);
+  escanearRedes(WIFI_SSID_2);
+
+  if (conectarWiFi(WIFI_SSID_2, WIFI_PASS_2, 25)) {
+    g_wifiConnected = true;
+    g_connState = CONN_WIFI_OK;
+    g_currentConnectedSSID = WIFI_SSID_2;
+    detenerPortalCautivo();
+    Serial.print(F("[OK] Conectado a "));
+    Serial.print(WIFI_SSID_2);
+    Serial.print(F(". IP: "));
+    Serial.println(WiFi.localIP());
+    return;
+  }
+
+  // 3. Si ambas fijas fallan, intentar con la red guardada en NVS desde el portal (prioridad 3)
+  if (g_configuredSSID.length() > 0 && g_configuredSSID != WIFI_SSID_1 && g_configuredSSID != WIFI_SSID_2) {
+    Serial.print(F("[WIFI] Prioridad 3 (Portal NVS): "));
+    Serial.println(g_configuredSSID);
+
+    if (conectarWiFi(g_configuredSSID.c_str(), g_configuredPass.c_str(), 20)) {
+      g_wifiConnected = true;
+      g_connState = CONN_WIFI_OK;
+      g_currentConnectedSSID = g_configuredSSID;
+      detenerPortalCautivo();
+      Serial.print(F("[OK] Conectado a red NVS: "));
+      Serial.println(g_configuredSSID);
+      Serial.print(F("     IP: "));
+      Serial.println(WiFi.localIP());
+      return;
+    }
+  } else {
+    Serial.println(F("[WIFI] Sin red adicional en memoria NVS"));
+  }
+
+  // 4. Si ninguna red conecta, iniciar portal cautivo AP
+  g_wifiConnected = false;
+  g_connState = CONN_NONE;
+  g_currentConnectedSSID = "";
+  Serial.println(F("[WARN] Ninguna red WiFi disponible. Iniciando Portal Cautivo AP..."));
+  iniciarPortalCautivo();
+}
+
+void iniciarPortalCautivo() {
+  if (g_apMode) return;
+  g_apMode = true;
+
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAPConfig(g_apIP, g_apIP, g_apNetmask);
+  WiFi.softAP(AP_SSID, AP_PASS);
+
+  g_dnsServer.start(DNS_PORT, "*", g_apIP);
+
+  Serial.println(F("╔══════════════════════════════════════════╗"));
+  Serial.print(F("║ PORTAL CAUTIVO INICIADO: ")); Serial.print(AP_SSID); Serial.println(F(" ║"));
+  Serial.print(F("║ IP: ")); Serial.print(WiFi.softAPIP()); Serial.println(F(" | User: admin / Pass: admin ║"));
+  Serial.println(F("╚══════════════════════════════════════════╝"));
+
+  mostrarAPStatus();
+}
+
+void detenerPortalCautivo() {
+  if (!g_apMode) return;
+  g_dnsServer.stop();
+  WiFi.softAPdisconnect(true);
+  g_apMode = false;
+  Serial.println(F("[PORTAL] Modo AP detenido"));
+}
+
+void initWiFi() {
+  loadConfig();
+  conectarWiFiCiclo();
 }
 
 void initSPIFFS() {
@@ -384,6 +676,9 @@ void initNTP() {
 }
 
 void initWebServer() {
+  static const char* headerKeys[] = {"User-Agent", "Cookie"};
+  server.collectHeaders(headerKeys, 2);
+
   // API REST v1
   server.on("/", HTTP_GET, handleRoot);
   server.on("/dashboard", HTTP_GET, handleDashboard);
@@ -391,9 +686,34 @@ void initWebServer() {
   server.on("/api/v1/data", HTTP_GET, handleApiV1Data);
   server.on("/api/v1/command", HTTP_POST, handleApiV1Command);
   server.on("/api/v1/history", HTTP_GET, handleApiV1History);
+
+  // Preflight CORS OPTIONS
+  server.on("/api/v1/status", HTTP_OPTIONS, []() { sendCorsHeaders(); server.send(204); });
+  server.on("/api/v1/data", HTTP_OPTIONS, []() { sendCorsHeaders(); server.send(204); });
+  server.on("/api/v1/command", HTTP_OPTIONS, []() { sendCorsHeaders(); server.send(204); });
+  server.on("/api/v1/history", HTTP_OPTIONS, []() { sendCorsHeaders(); server.send(204); });
+
+  // Portal Cautivo & Configuración WiFi
+  server.on("/portal", HTTP_GET, handlePortal);
+  server.on("/portal/login", HTTP_POST, handlePortalLogin);
+  server.on("/portal/logout", HTTP_GET, handlePortalLogout);
+  server.on("/portal/scan", HTTP_GET, handlePortalScan);
+  server.on("/portal/save", HTTP_POST, handlePortalSave);
+  server.on("/portal/admin", HTTP_POST, handlePortalAdminChange);
+  server.on("/portal/reboot", HTTP_POST, handlePortalReboot);
+
+  // Detección automática de Portal Cautivo (Android / iOS / Windows)
+  server.on("/generate_204", handleCaptivePortalRedirect);
+  server.on("/gen_204", handleCaptivePortalRedirect);
+  server.on("/hotspot-detect.html", handleCaptivePortalRedirect);
+  server.on("/ncsi.txt", handleCaptivePortalRedirect);
+  server.on("/connecttest.txt", handleCaptivePortalRedirect);
+  server.on("/canonical.html", handleCaptivePortalRedirect);
+
+  server.onNotFound(handleNotFound);
   
   server.begin();
-  Serial.println(F("[OK] Web server iniciado en puerto 80"));
+  Serial.println(F("[OK] Web server iniciado en puerto 80 (API + Portal Cautivo)"));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -491,6 +811,13 @@ void parsearTelemetria(const String& p) {
   String t = getField("TEMP");   if (t.length()) g_node.temp = t.toFloat();
   String h = getField("HUM");    if (h.length()) g_node.hum = h.toFloat();
   String s = getField("SOIL");   if (s.length()) g_node.soilADC = s.toInt();
+  String sp = getField("SOILPCT");
+  if (sp.length()) {
+    g_node.soilPct = sp.toFloat();
+  } else {
+    // Fallback si no viene en payload: seco=3200 -> 0%, mojado=1400 -> 100%
+    g_node.soilPct = constrain(map(constrain(g_node.soilADC, 1400, 3200), 3200, 1400, 0, 100), 0, 100);
+  }
   String w = getField("WATER");  if (w.length()) g_node.waterADC = w.toInt();
   String wl = getField("WLVL");  if (wl.length()) g_node.waterPct = wl.toFloat();
   String s1 = getField("S1");    if (s1.length()) g_node.s1 = s1.toInt();
@@ -498,9 +825,6 @@ void parsearTelemetria(const String& p) {
   String pm = getField("PUMP");  if (pm.length()) g_node.pump = (pm == "1");
   String md = getField("MODE");  if (md.length()) g_node.mode = md;
   String cnt = getField("CNT");  if (cnt.length()) g_node.packetCnt = cnt.toInt();
-  
-  // Calcular soil_pct si no viene en payload (fallback)
-  g_node.soilPct = map(constrain(g_node.soilADC, 0, 4095), 0, 4095, 0, 100);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -509,7 +833,7 @@ void parsearTelemetria(const String& p) {
 
 bool enviarSupabaseDirect(const String& jsonPayload) {
   if (!g_wifiConnected) {
-    Serial.println(F("[SUPA] Skip: no WiFi"));
+    Serial.println(F("[SUPA] Skip: Sin conexion WiFi"));
     return false;
   }
 
@@ -527,9 +851,12 @@ bool enviarSupabaseDirect(const String& jsonPayload) {
   HTTPClient https;
   String url = String(SUPABASE_URL) + "/rest/v1/" + SUPABASE_TABLE;
 
+  Serial.print(F("[SUPA] Destino HTTPS: ")); Serial.println(url);
+  Serial.print(F("[SUPA] Payload: ")); Serial.println(payload);
+
   https.setTimeout(15000);  // 15 seg timeout
   if (!https.begin(wifiSecure, url)) {
-    Serial.println(F("[SUPA] Error: no se pudo iniciar conexion HTTPS"));
+    Serial.println(F("[SUPA] ❌ Error: no se pudo iniciar conexion HTTPS (falla al inicializar cliente TLS)"));
     return false;
   }
 
@@ -541,26 +868,68 @@ bool enviarSupabaseDirect(const String& jsonPayload) {
   int httpCode = https.POST(payload);
 
   if (httpCode == 201 || httpCode == 200) {
-    Serial.println(F("[SUPA] Dato enviado OK"));
+    Serial.print(F("[SUPA] ✅ Dato enviado OK (HTTP "));
+    Serial.print(httpCode);
+    Serial.println(F(")"));
     https.end();
     return true;
   } else {
-    Serial.print(F("[SUPA] Error HTTP "));
+    Serial.print(F("[SUPA] ❌ Error HTTP "));
     Serial.print(httpCode);
-    if (httpCode == -1) Serial.println(F(" (-1 = fallo SSL/TLS o DNS)"));
-    else if (httpCode == -11) Serial.println(F(" (timeout)"));
-    else {
-      // Imprimir respuesta del servidor (PostgREST devuelve el motivo en JSON)
+    if (httpCode == -1) {
+      Serial.println(F(" (-1 = Fallo SSL/TLS o DNS: el ESP32 no pudo resolver el dominio de Supabase o fallo el handshake TLS)"));
+    } else if (httpCode == -11) {
+      Serial.println(F(" (-11 = Timeout en handshake HTTPS con Supabase)"));
+    } else {
       String resp = https.getString();
-      Serial.print(F(" -> "));
+      Serial.print(F(" -> Respuesta Supabase: "));
       Serial.println(resp);
-      // También imprimir el payload enviado, para comparar
-      Serial.print(F("[SUPA] Payload: "));
-      Serial.println(payload);
+      if (httpCode == 401 || httpCode == 403) {
+        Serial.println(F("[SUPA] ⚠️ Posible error de permisos / RLS o SUPABASE_KEY incorrecta."));
+      } else if (httpCode == 404) {
+        Serial.println(F("[SUPA] ⚠️ La tabla autoinver_data no existe en tu proyecto Supabase."));
+      }
     }
     https.end();
     return false;
   }
+}
+
+bool enviarTelemetriaActualSupabase() {
+  if (!g_wifiConnected) {
+    Serial.println(F("[SUPA] Skip envio: Sin conexion WiFi"));
+    return false;
+  }
+  if (!g_node.valid) {
+    Serial.println(F("[SUPA] Skip envio: Sin datos validos de nodo"));
+    return false;
+  }
+
+  Serial.println(F("[SUPA] 🚀 Enviando telemetria en vivo a Supabase..."));
+  StaticJsonDocument<512> doc;
+  doc["device_id"] = "AUTOINVER";
+  doc["temp_c"] = g_node.temp;
+  doc["hum_pct"] = g_node.hum;
+  doc["soil_adc"] = g_node.soilADC;
+  doc["soil_pct"] = g_node.soilPct;
+  doc["water_adc"] = g_node.waterADC;
+  doc["water_pct"] = g_node.waterPct;
+  doc["servo1_pos"] = g_node.s1;
+  doc["servo2_pos"] = g_node.s2;
+  doc["pump_state"] = g_node.pump;
+  doc["rssi"] = g_node.rssi;
+  doc["raw_payload"] = "live";
+
+  String jsonStr;
+  serializeJson(doc, jsonStr);
+  bool ok = enviarSupabaseDirect(jsonStr);
+  if (!ok) {
+    Serial.println(F("[SUPA] ⚠️ No se pudo enviar directo; guardando en buffer SPIFFS..."));
+    guardarEnBuffer(jsonStr);
+  } else {
+    g_lastSupabaseSend = millis();
+  }
+  return ok;
 }
 
 void guardarEnBuffer(const String& jsonLine) {
@@ -756,6 +1125,8 @@ void pollComandosPendientes() {
   StaticJsonDocument<1024> doc;
   if (deserializeJson(doc, body) != DeserializationError::Ok) return;
 
+  bool comandoEjecutado = false;
+
   for (JsonObject cmd : doc.as<JsonArray>()) {
     long id = cmd["id"] | 0;
     String action = cmd["action"] | "";
@@ -769,8 +1140,27 @@ void pollComandosPendientes() {
     // Enviar al nodo por LoRa
     enviarComandoLoRa(action, value);
 
+    // Actualizar estado local inmediatamente para reflejar el cambio
+    if (action == "BOMBA" || action == "PUMP") {
+      g_node.pump = (value == "1");
+    } else if (action == "S1") {
+      g_node.s1 = value.toInt();
+    } else if (action == "S2") {
+      g_node.s2 = value.toInt();
+    } else if (action == "MODE") {
+      g_node.mode = value;
+    }
+
     // Marcar como ACK en Supabase
     ackComando(id);
+    comandoEjecutado = true;
+  }
+
+  // Sincronizar inmediatamente la telemetría con Supabase tras ejecutar comandos
+  // para que el Dashboard vea el cambio al instante sin esperar los 30s.
+  if (comandoEjecutado && g_node.valid) {
+    Serial.println(F("[CMD] ⚡ Sincronizando nuevo estado inmediatamente con Supabase..."));
+    enviarTelemetriaActualSupabase();
   }
 }
 
@@ -799,8 +1189,249 @@ void ackComando(long id) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void handleRoot() {
-  server.sendHeader("Location", "/dashboard");
-  server.send(302, "text/plain", "Redirecting to dashboard...");
+  if (g_apMode) {
+    server.sendHeader("Location", "/portal");
+    server.send(302, "text/plain", "Redirecting to portal...");
+  } else {
+    server.sendHeader("Location", "/dashboard");
+    server.send(302, "text/plain", "Redirecting to dashboard...");
+  }
+}
+
+void handleNotFound() {
+  if (g_apMode) {
+    handleCaptivePortalRedirect();
+  } else {
+    server.send(404, "text/plain", "404 Not Found");
+  }
+}
+
+void handleCaptivePortalRedirect() {
+  server.sendHeader("Location", "http://192.168.4.1/portal", true);
+  server.send(302, "text/plain", "");
+}
+
+bool isPortalAuthenticated() {
+  String cookie = server.header("Cookie");
+  if (cookie.indexOf("AUTOSESS=ok") >= 0) return true;
+  if (server.hasArg("token") && server.arg("token") == "autoinver_ok") return true;
+  return false;
+}
+
+void handlePortal() {
+  bool auth = isPortalAuthenticated();
+  String html = generatePortalHTML(auth);
+  server.send(200, "text/html", html);
+}
+
+void handlePortalLogin() {
+  String u = server.arg("user");
+  String p = server.arg("pass");
+  u.trim();
+  p.trim();
+
+  if (u == g_adminUser && p == g_adminPass) {
+    server.sendHeader("Set-Cookie", "AUTOSESS=ok; Path=/; Max-Age=3600");
+    server.sendHeader("Location", "/portal");
+    server.send(302, "text/plain", "");
+  } else {
+    String html = generatePortalHTML(false, "Usuario o contraseña inválidos. (Por defecto: admin / admin)");
+    server.send(200, "text/html", html);
+  }
+}
+
+void handlePortalLogout() {
+  server.sendHeader("Set-Cookie", "AUTOSESS=; Path=/; Max-Age=0");
+  server.sendHeader("Location", "/portal");
+  server.send(302, "text/plain", "");
+}
+
+void handlePortalScan() {
+  int n = WiFi.scanNetworks();
+  String json = "[";
+  for (int i = 0; i < n; i++) {
+    if (i > 0) json += ",";
+    json += "{\"ssid\":\"" + escapeJson(WiFi.SSID(i)) + "\",";
+    json += "\"rssi\":" + String(WiFi.RSSI(i)) + ",";
+    json += "\"sec\":" + String(WiFi.encryptionType(i) != WIFI_AUTH_OPEN ? "true" : "false") + "}";
+  }
+  json += "]";
+  WiFi.scanDelete();
+  server.send(200, "application/json", json);
+}
+
+void handlePortalSave() {
+  if (!isPortalAuthenticated()) {
+    server.send(403, "text/plain", "No autenticado");
+    return;
+  }
+
+  String ssid = server.arg("ssid");
+  String pass = server.arg("pass");
+  ssid.trim();
+  pass.trim();
+
+  if (ssid.length() == 0) {
+    String html = generatePortalHTML(true, "El nombre de red (SSID) no puede estar vacío.");
+    server.send(200, "text/html", html);
+    return;
+  }
+
+  saveNetworkConfig(ssid, pass);
+  String succMsg = "Red '" + ssid + "' guardada. Conectando con jerarquía: 1) geogo_IoT, 2) " + ssid;
+  String html = generatePortalHTML(true, "", succMsg);
+  server.send(200, "text/html", html);
+
+  delay(600);
+  conectarWiFiCiclo();
+}
+
+void handlePortalAdminChange() {
+  if (!isPortalAuthenticated()) {
+    server.send(403, "text/plain", "No autenticado");
+    return;
+  }
+
+  String u = server.arg("adm_user");
+  String p = server.arg("adm_pass");
+  u.trim();
+  p.trim();
+
+  if (u.length() > 0 && p.length() > 0) {
+    saveAdminConfig(u, p);
+    String html = generatePortalHTML(true, "", "Credenciales de administrador actualizadas con éxito ✅");
+    server.send(200, "text/html", html);
+  } else {
+    String html = generatePortalHTML(true, "El usuario y contraseña no pueden estar vacíos.");
+    server.send(200, "text/html", html);
+  }
+}
+
+void handlePortalReboot() {
+  if (!isPortalAuthenticated()) {
+    server.send(403, "text/plain", "No autenticado");
+    return;
+  }
+  server.send(200, "text/plain", "Reiniciando Gateway...");
+  delay(1000);
+  ESP.restart();
+}
+
+String generatePortalHTML(bool authenticated, const String& errorMsg, const String& successMsg) {
+  String html = "";
+  html.reserve(7000);
+
+  html += F("<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"UTF-8\">");
+  html += F("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">");
+  html += F("<title>Autoinver Gateway - Portal WiFi</title>");
+  html += F("<style>");
+  html += F(":root{--bg:#0b1120;--card:rgba(30,41,59,0.85);--border:rgba(255,255,255,0.1);");
+  html += F("--accent:#10b981;--blue:#3b82f6;--red:#ef4444;--text:#f8fafc;--muted:#94a3b8;}");
+  html += F("*{margin:0;padding:0;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;}");
+  html += F("body{background:radial-gradient(circle at top,#1e293b,#0b1120);color:var(--text);min-height:100vh;padding:16px;display:flex;justify-content:center;}");
+  html += F(".container{width:100%;max-width:480px;margin:16px auto;}");
+  html += F(".header{text-align:center;margin-bottom:20px;}");
+  html += F(".header h1{font-size:1.5rem;font-weight:800;background:linear-gradient(90deg,#10b981,#3b82f6);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}");
+  html += F(".header p{font-size:0.85rem;color:var(--muted);margin-top:4px;}");
+  html += F(".card{background:var(--card);backdrop-filter:blur(10px);border:1px solid var(--border);border-radius:16px;padding:20px;margin-bottom:16px;box-shadow:0 8px 30px rgba(0,0,0,0.3);}");
+  html += F(".card-title{font-size:0.95rem;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px;}");
+  html += F(".rule-box{background:rgba(16,185,129,0.08);border-left:3px solid var(--accent);padding:10px 12px;border-radius:0 8px 8px 0;font-size:0.8rem;margin-bottom:10px;line-height:1.4;}");
+  html += F(".alert{padding:12px;border-radius:10px;font-size:0.85rem;margin-bottom:14px;}");
+  html += F(".alert-err{background:rgba(239,68,68,0.15);border:1px solid var(--red);color:#fca5a5;}");
+  html += F(".alert-succ{background:rgba(16,185,129,0.15);border:1px solid var(--accent);color:#6ee7b7;}");
+  html += F(".form-group{margin-bottom:14px;}");
+  html += F("label{display:block;font-size:0.8rem;color:var(--muted);margin-bottom:6px;font-weight:500;}");
+  html += F("input[type='text'],input[type='password']{width:100%;padding:10px 12px;border-radius:10px;background:rgba(15,23,42,0.6);border:1px solid var(--border);color:var(--text);font-size:0.95rem;outline:none;}");
+  html += F("input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(16,185,129,0.2);}");
+  html += F(".btn{width:100%;padding:11px;border-radius:10px;border:none;font-size:0.9rem;font-weight:600;cursor:pointer;transition:all .2s;}");
+  html += F(".btn-pri{background:linear-gradient(135deg,#10b981,#059669);color:#fff;}");
+  html += F(".btn-pri:hover{opacity:.95;}");
+  html += F(".btn-sec{background:rgba(255,255,255,0.1);color:var(--text);}");
+  html += F(".btn-danger{background:rgba(239,68,68,0.15);color:#fca5a5;border:1px solid var(--red);}");
+  html += F(".wifi-item{background:rgba(15,23,42,0.5);border:1px solid var(--border);padding:10px 12px;border-radius:10px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;}");
+  html += F(".wifi-item:hover{border-color:var(--accent);background:rgba(16,185,129,0.08);}");
+  html += F(".wifi-list{max-height:200px;overflow-y:auto;margin-bottom:10px;}");
+  html += F("</style></head><body>");
+
+  html += F("<div class=\"container\"><div class=\"header\">");
+  html += F("<h1>🌿 AUTOINVER GATEWAY</h1>");
+  html += F("<p>Portal Cautivo de Configuración WiFi</p></div>");
+
+  if (errorMsg.length() > 0) {
+    html += "<div class=\"alert alert-err\">⚠️ " + errorMsg + "</div>";
+  }
+  if (successMsg.length() > 0) {
+    html += "<div class=\"alert alert-succ\">✅ " + successMsg + "</div>";
+  }
+
+  if (!authenticated) {
+    html += F("<div class=\"card\"><div class=\"card-title\">🔐 Acceso al Portal</div>");
+    html += F("<p style=\"font-size:0.8rem;color:var(--muted);margin-bottom:14px;\">Ingresa las credenciales administrativas para gestionar las redes WiFi.</p>");
+    html += F("<form action=\"/portal/login\" method=\"POST\">");
+    html += F("<div class=\"form-group\"><label>Usuario</label><input type=\"text\" name=\"user\" value=\"admin\" required autofocus></div>");
+    html += F("<div class=\"form-group\"><label>Contraseña</label><input type=\"password\" name=\"pass\" placeholder=\"••••••••\" required></div>");
+    html += F("<button type=\"submit\" class=\"btn btn-pri\">Ingresar al Portal</button></form>");
+    html += F("<p style=\"font-size:0.75rem;color:var(--muted);text-align:center;margin-top:14px;\">Credenciales por defecto: <strong>admin</strong> / <strong>admin</strong></p></div>");
+  } else {
+    // Tarjeta Jerarquía de Conexión
+    html += F("<div class=\"card\"><div class=\"card-title\">📶 Jerarquía de Conexión</div>");
+    html += "<div class=\"rule-box\"><strong>🥇 Prioridad 1 (Nativa):</strong> <code>" + String(WIFI_SSID_1) + "</code><br>";
+    html += F("Se intenta siempre primero de forma automática.</div>");
+
+    html += F("<div class=\"rule-box\" style=\"border-left-color:var(--blue);background:rgba(59,130,246,0.08);\">");
+    html += "<strong style=\"color:var(--blue);\">🥈 Prioridad 2 (Respaldo):</strong> <code>" + String(WIFI_SSID_2) + "</code><br>";
+    html += F("Se intenta si geogo_IoT no está disponible.</div>");
+
+    html += F("<div class=\"rule-box\" style=\"border-left-color:#8b5cf6;background:rgba(139,92,246,0.08);\">");
+    html += "<strong style=\"color:#a78bfa;\">🥉 Prioridad 3 (Personalizada):</strong> <code>" + (g_configuredSSID.length() > 0 ? g_configuredSSID : String("(Ninguna)")) + "</code><br>";
+    html += F("Red adicional guardada en memoria flash desde este portal.</div>");
+    html += "</div>";
+
+    // Tarjeta Escáner
+    html += F("<div class=\"card\"><div class=\"card-title\">🔍 Redes WiFi Disponibles");
+    html += F("<button class=\"btn btn-sec\" style=\"width:auto;padding:4px 10px;font-size:0.75rem;margin-left:auto;\" onclick=\"scanWifi()\">Escanear</button></div>");
+    html += F("<div id=\"scanLoad\" style=\"display:none;text-align:center;font-size:0.8rem;color:var(--muted);padding:8px;\">Escaneando redes cercanas... ⏳</div>");
+    html += F("<div id=\"wifiList\" class=\"wifi-list\"><div style=\"text-align:center;font-size:0.8rem;color:var(--muted);padding:10px;\">Presiona 'Escanear' para buscar redes.</div></div></div>");
+
+    // Tarjeta Configurar Red Secundaria
+    html += F("<div class=\"card\"><div class=\"card-title\">⚙️ Configurar Red Secundaria</div>");
+    html += F("<form action=\"/portal/save\" method=\"POST\">");
+    html += "<div class=\"form-group\"><label>Nombre de Red (SSID)</label><input type=\"text\" id=\"ssidIn\" name=\"ssid\" value=\"" + g_configuredSSID + "\" placeholder=\"Nombre de red WiFi\" required></div>";
+    html += "<div class=\"form-group\"><label>Contraseña</label><input type=\"password\" id=\"passIn\" name=\"pass\" value=\"" + g_configuredPass + "\" placeholder=\"Clave WiFi\"></div>";
+    html += F("<div style=\"margin-bottom:14px;font-size:0.8rem;\"><label style=\"display:flex;align-items:center;gap:6px;cursor:pointer;\"><input type=\"checkbox\" onchange=\"document.getElementById('passIn').type=this.checked?'text':'password'\"> Mostrar contraseña</label></div>");
+    html += F("<button type=\"submit\" class=\"btn btn-pri\">💾 Guardar y Conectar</button></form></div>");
+
+    // Tarjeta Credenciales Admin
+    html += F("<div class=\"card\"><div class=\"card-title\">🔒 Seguridad del Portal</div>");
+    html += F("<form action=\"/portal/admin\" method=\"POST\">");
+    html += "<div class=\"form-group\"><label>Usuario Administrador</label><input type=\"text\" name=\"adm_user\" value=\"" + g_adminUser + "\" required></div>";
+    html += "<div class=\"form-group\"><label>Nueva Contraseña</label><input type=\"password\" name=\"adm_pass\" placeholder=\"Nueva clave\" required></div>";
+    html += F("<button type=\"submit\" class=\"btn btn-sec\">Actualizar Clave Admin</button></form></div>");
+
+    // Acciones y Salida
+    html += F("<div class=\"card\" style=\"display:flex;gap:10px;\">");
+    html += F("<button onclick=\"rebootGw()\" class=\"btn btn-danger\" style=\"flex:1;\">⚡ Reiniciar Gateway</button>");
+    html += F("<a href=\"/portal/logout\" class=\"btn btn-sec\" style=\"flex:1;text-decoration:none;display:flex;align-items:center;justify-content:center;\">🚪 Salir</a></div>");
+  }
+
+  html += F("</div>");
+
+  if (authenticated) {
+    html += F("<script>");
+    html += F("async function scanWifi(){");
+    html += F("const b=document.getElementById('wifiList');const l=document.getElementById('scanLoad');");
+    html += F("l.style.display='block';b.innerHTML='';");
+    html += F("try{const r=await fetch('/portal/scan');const d=await r.json();l.style.display='none';");
+    html += F("if(!d.length){b.innerHTML='<div style=\"text-align:center;font-size:0.8rem;color:#94a3b8;padding:8px;\">Sin redes detectadas.</div>';return;}");
+    html += F("b.innerHTML=d.map(n=>`<div class=\"wifi-item\" onclick=\"setNet('${n.ssid.replace(/'/g,\"\\\\'\")}')\"><div><div style=\"font-weight:600;font-size:0.85rem;\">${n.ssid}</div><div style=\"font-size:0.75rem;color:#94a3b8;\">${n.sec?'🔒 Protegida':'🔓 Abierta'} · RSSI: ${n.rssi} dBm</div></div><div style=\"color:#10b981;font-size:0.8rem;font-weight:600;\">Seleccionar ➔</div></div>`).join('');");
+    html += F("}catch(e){l.style.display='none';b.innerHTML='<div style=\"color:#ef4444;font-size:0.8rem;text-align:center;padding:8px;\">Error al escanear.</div>';}}");
+    html += F("function setNet(s){document.getElementById('ssidIn').value=s;document.getElementById('passIn').focus();}");
+    html += F("async function rebootGw(){if(confirm('¿Reiniciar Gateway ahora?')){await fetch('/portal/reboot',{method:'POST'});alert('Reiniciando... Espera 10 segundos.');}}");
+    html += F("</script>");
+  }
+
+  html += F("</body></html>");
+  return html;
 }
 
 void handleDashboard() {
@@ -808,7 +1439,14 @@ void handleDashboard() {
   server.send(200, "text/html", html);
 }
 
+void sendCorsHeaders() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "*");
+}
+
 void handleApiV1Status() {
+  sendCorsHeaders();
   StaticJsonDocument<512> doc;
   doc["gateway_uptime_ms"] = millis();
   doc["wifi_connected"] = g_wifiConnected;
@@ -827,6 +1465,7 @@ void handleApiV1Status() {
 }
 
 void handleApiV1Data() {
+  sendCorsHeaders();
   StaticJsonDocument<512> doc;
   if (g_node.valid) {
     doc["node_id"] = g_node.nodeID;
@@ -853,6 +1492,7 @@ void handleApiV1Data() {
 }
 
 void handleApiV1Command() {
+  sendCorsHeaders();
   if (!server.hasArg("act") || !server.hasArg("val")) {
     server.send(400, "application/json", "{\"error\":\"Missing act/val\"}");
     return;
@@ -869,6 +1509,21 @@ void handleApiV1Command() {
   
   enviarComandoLoRa(act, val);
   
+  // Actualizar estado local
+  if (act == "BOMBA" || act == "PUMP") {
+    g_node.pump = (val == "1");
+  } else if (act == "S1") {
+    g_node.s1 = val.toInt();
+  } else if (act == "S2") {
+    g_node.s2 = val.toInt();
+  } else if (act == "MODE") {
+    g_node.mode = val;
+  }
+
+  if (g_node.valid && g_wifiConnected) {
+    enviarTelemetriaActualSupabase();
+  }
+  
   StaticJsonDocument<256> doc;
   doc["status"] = "sent";
   doc["action"] = act;
@@ -881,6 +1536,7 @@ void handleApiV1Command() {
 }
 
 void handleApiV1History() {
+  sendCorsHeaders();
   // Devolver últimas líneas del buffer local
   int limit = server.hasArg("limit") ? server.arg("limit").toInt() : 50;
   if (limit > 200) limit = 200;
@@ -1090,8 +1746,11 @@ String generateDashboardHTML() {
       <span>📦 Paquetes: )rawliteral" + String(g_totalRxPackets) + R"rawliteral(</span>
     </div>
     <div class="status-pill">
-      <span>🌐 IP: )rawliteral" + WiFi.localIP().toString() + R"rawliteral(</span>
+      <span>🌐 IP: )rawliteral" + (g_wifiConnected ? WiFi.localIP().toString() : WiFi.softAPIP().toString()) + R"rawliteral(</span>
     </div>
+    <a href="/portal" style="text-decoration:none; color:#10b981;" class="status-pill">
+      <span>⚙️ Config WiFi</span>
+    </a>
   </div>
 
   <div class="grid">
@@ -1197,7 +1856,7 @@ void actualizarDisplay() {
   
   // Indicadores de conexión
   display.setCursor(75, 1);
-  display.print(g_wifiConnected ? "W" : "-");
+  display.print(g_wifiConnected ? "W" : (g_apMode ? "A" : "-"));
   display.print(g_ntpSynced ? "N" : "-");
   display.print(g_bufferLines > 0 ? "B" : "-");
   
@@ -1266,16 +1925,42 @@ void showBootScreen() {
   display.display();
 }
 
-void mostrarWiFiStatus(int intento) {
+void mostrarWiFiStatus(const char* ssid, int intento) {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.print(F("Conectando WiFi"));
-  display.setCursor(0, 20);
-  display.print(WIFI_SSID);
-  display.setCursor(0, 40);
-  display.print(F("Intento "));
+  display.print(F("Conectando WiFi..."));
+  display.setCursor(0, 16);
+  display.print(F("Red: "));
+  display.print(ssid);
+  display.setCursor(0, 34);
+  display.print(F("Intento: "));
   display.print(intento);
+  display.setCursor(0, 50);
+  display.print(F("1:geogo 2:amarox"));
+  display.display();
+}
+
+void mostrarAPStatus() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.fillRect(0, 0, SCREEN_W, 10, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setCursor(2, 1);
+  display.print(F("PORTAL CAUTIVO AP"));
+
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 14);
+  display.print(F("SSID: "));
+  display.print(AP_SSID);
+  display.setCursor(0, 28);
+  display.print(F("IP:   192.168.4.1"));
+  display.setCursor(0, 42);
+  display.print(F("User: "));
+  display.print(g_adminUser);
+  display.setCursor(0, 54);
+  display.print(F("Pass: "));
+  display.print(g_adminPass);
   display.display();
 }
 
@@ -1325,4 +2010,22 @@ String getTimestampStr() {
   if (s < 10)  t += "0"; t += String(s);
   
   return t;
+}
+
+String escapeJson(const String& s) {
+  String out = "";
+  for (unsigned int i = 0; i < s.length(); i++) {
+    char c = s.charAt(i);
+    if (c == '"') out += "\\\"";
+    else if (c == '\\') out += "\\\\";
+    else if (c == '\n') out += "\\n";
+    else if (c == '\r') out += "\\r";
+    else if (c == '\t') out += "\\t";
+    else out += c;
+  }
+  return out;
+}
+
+bool checkInternetConnection() {
+  return g_wifiConnected;
 }

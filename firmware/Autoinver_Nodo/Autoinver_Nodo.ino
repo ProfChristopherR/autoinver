@@ -3,7 +3,7 @@
  * ║                    AUTOINVER NODO v2.0 - FIRMWARE                         ║
  * ║         Sistema Autónomo de Invernadero Móvil con LoRa 915MHz             ║
  * ║                                                                           ║
- * ║  Hardware: Heltec LoRa32 V2 + DHT22 + HumSuelo + Sharp IR + PCA9685      ║
+ * ║  Hardware: Heltec LoRa32 V2 + DHT22 + HumSuelo + Sharp IR + PCA9685       ║
  * ║  Autor: Agente Implementador | Licencia: MIT                              ║
  * ╚═══════════════════════════════════════════════════════════════════════════╝
  */
@@ -93,11 +93,12 @@ SyncState     g_syncState   = SYNC_NONE;
 bool          g_pcaOk       = false;  // PCA9685 detectado en I2C
 
 // Timestamps no-bloqueantes
-unsigned long g_lastSensorRead  = 0;
-unsigned long g_lastTx          = 0;
-unsigned long g_lastDisplayUpd  = 0;
-unsigned long g_lastSyncAttempt = 0;
+unsigned long g_lastSensorRead    = 0;
+unsigned long g_lastTx            = 0;
+unsigned long g_lastDisplayUpd    = 0;
+unsigned long g_lastSyncAttempt   = 0;
 unsigned long g_manualOverrideUntil = 0;
+unsigned long g_lastPumpStopMs    = 0;
 
 // Control de override manual
 String        g_lastCommand     = "NINGUNO";
@@ -123,6 +124,11 @@ void initRTC();
 void loadCalibration();
 void saveCalibration();
 void showBootScreen();
+
+// Calibración Serial USB
+void handleSerialConsole();
+void printCalibrationStatus();
+void printHelpMenu();
 
 // Sensores
 void readAllSensors();
@@ -188,6 +194,10 @@ void setup() {
   Serial.println(F("[BOOT] Sistema iniciado correctamente"));
   Serial.println(F("[BOOT] Modo: AUTO | Sync: PENDIENTE"));
 
+  // Mostrar menú y estado de calibración en Serial
+  printHelpMenu();
+  printCalibrationStatus();
+
   // Primer sync de hora
   requestTimeSync();
   g_syncState = SYNC_WAIT;
@@ -206,28 +216,33 @@ void loop() {
   if (now - g_lastSensorRead >= SENSOR_INTERVAL_MS) {
     g_lastSensorRead = now;
     readAllSensors();
-    
-    if (g_mode == MODE_AUTO && now > g_manualOverrideUntil) {
-      runControlLogic();
-    }
+    now = millis();
   }
 
-  // ── 2. Gestión timeout bomba (seguridad) ──
+  // ── 2. Control automático (riego por pulsos y compuertas) ──
+  if (g_mode == MODE_AUTO && now > g_manualOverrideUntil) {
+    runControlLogic();
+  }
+
+  // ── 3. Gestión timeout bomba (fin de pulso de 1s y cortes de seguridad) ──
   managePumpTimeout(now);
 
-  // ── 3. Transmisión LoRa cada TX_INTERVAL_MS ──
+  // ── 4. Transmisión LoRa cada TX_INTERVAL_MS ──
   if (now - g_lastTx >= TX_INTERVAL_MS) {
     g_lastTx = now;
     transmitTelemetry();
   }
 
-  // ── 4. Sincronización de hora ──
+  // ── 5. Sincronización de hora ──
   if (g_syncState != SYNC_OK) {
     handleTimeSync(now);
   }
 
-  // ── 5. Escucha de comandos del gateway ──
+  // ── 5. Escucha de comandos del gateway por LoRa ──
   listenForCommands();
+
+  // ── 5b. Escucha de comandos de calibración por Serial USB ──
+  handleSerialConsole();
 
   // ── 6. Actualización OLED cada DISPLAY_INTERVAL_MS ──
   if (now - g_lastDisplayUpd >= DISPLAY_INTERVAL_MS) {
@@ -329,24 +344,15 @@ void initActuators() {
     pca.setPWMFreq(50);  // 50Hz para servos
     g_pcaOk = true;
 
-    // Prueba de barrido al arranque: el servo debe moverse 0->90->0
-    Serial.println(F("[SERVO] Prueba de barrido en PWM0..."));
-    setServoAngle(CHANNEL_SERVO_A, 0);
-    delay(800);
-    setServoAngle(CHANNEL_SERVO_A, 90);
-    delay(800);
-    setServoAngle(CHANNEL_SERVO_A, 0);
-    delay(800);
+    // Posición segura inicial: compuertas cerradas (0°)
+    setServoAngle(CHANNEL_SERVO_A, g_config.servo1Min);
+    setServoAngle(CHANNEL_SERVO_B, g_config.servo2Min);
 
-    // Posición segura inicial
-    setServoAngle(CHANNEL_SERVO_A, VENT_CLOSED);
-    setServoAngle(CHANNEL_SERVO_B, VENT_CLOSED);
-
-    g_actuators.servo1Pos = VENT_CLOSED;
-    g_actuators.servo2Pos = VENT_CLOSED;
+    g_actuators.servo1Pos = g_config.servo1Min;
+    g_actuators.servo2Pos = g_config.servo2Min;
   }
 
-  Serial.println(F("[OK] Actuadores iniciados (posición segura)"));
+  Serial.println(F("[OK] Actuadores iniciados (compuertas en 0° cerradas)"));
 }
 
 void initRTC() {
@@ -364,25 +370,51 @@ void initRTC() {
 }
 
 void loadCalibration() {
-  // Cargar calibración desde NVS, o usar defaults
-  g_config.sharpMinADC  = prefs.getInt("sharp_min", 500);
-  g_config.sharpMaxADC  = prefs.getInt("sharp_max", 3500);
+  // Cargar calibración desde NVS, o usar defaults seguros
+  g_config.sharpMinADC  = prefs.getInt("sharp_min", 800);
+  g_config.sharpMaxADC  = prefs.getInt("sharp_max", 2500);
+  g_config.soilMinADC   = prefs.getInt("soil_min", 1400);
+  g_config.soilMaxADC   = prefs.getInt("soil_max", 3200);
+  g_config.servo1Min    = prefs.getInt("s1_min", 0);
+  g_config.servo1Max    = prefs.getInt("s1_max", 90);
+  g_config.servo2Min    = prefs.getInt("s2_min", 0);
+  g_config.servo2Max    = prefs.getInt("s2_max", 90);
   g_config.tempThresh1  = prefs.getFloat("temp_t1", 28.0f);
   g_config.tempThresh2  = prefs.getFloat("temp_t2", 32.0f);
   g_config.soilThresh   = prefs.getFloat("soil_thr", 40.0f);
-  g_config.pumpDuration = prefs.getInt("pump_dur", 10000);
-  
+  g_config.pumpDuration = prefs.getInt("pump_dur", 1000);
+
+  // Sanitizar si NVS tenía guardados los valores antiguos incorrectos
+  if (g_config.soilMaxADC <= g_config.soilMinADC || g_config.soilMaxADC == 4095) {
+    g_config.soilMinADC = 1400;
+    g_config.soilMaxADC = 3200;
+  }
+  if (g_config.sharpMaxADC <= g_config.sharpMinADC || g_config.sharpMaxADC == 3500) {
+    g_config.sharpMinADC = 800;
+    g_config.sharpMaxADC = 2500;
+  }
+  if (g_config.pumpDuration < 500) {
+    g_config.pumpDuration = 1000;
+    prefs.putInt("pump_dur", 1000);
+  }
+
   Serial.println(F("[OK] Calibración cargada desde NVS"));
 }
 
 void saveCalibration() {
   prefs.putInt("sharp_min", g_config.sharpMinADC);
   prefs.putInt("sharp_max", g_config.sharpMaxADC);
+  prefs.putInt("soil_min", g_config.soilMinADC);
+  prefs.putInt("soil_max", g_config.soilMaxADC);
+  prefs.putInt("s1_min", g_config.servo1Min);
+  prefs.putInt("s1_max", g_config.servo1Max);
+  prefs.putInt("s2_min", g_config.servo2Min);
+  prefs.putInt("s2_max", g_config.servo2Max);
   prefs.putFloat("temp_t1", g_config.tempThresh1);
   prefs.putFloat("temp_t2", g_config.tempThresh2);
   prefs.putFloat("soil_thr", g_config.soilThresh);
   prefs.putInt("pump_dur", g_config.pumpDuration);
-  
+
   Serial.println(F("[OK] Calibración guardada en NVS"));
 }
 
@@ -403,28 +435,27 @@ void readAllSensors() {
     Serial.println(F("[WARN] DHT22 lectura fallida"));
   }
 
-  // ── ADC con suavizado (media móvil) ──
-  g_soilSamples[g_sampleIndex]  = analogRead(PIN_SOIL);
-  g_waterSamples[g_sampleIndex] = analogRead(PIN_SHARP);
-  g_sampleIndex = (g_sampleIndex + 1) % ADC_SAMPLES;
-  if (g_sampleIndex == 0) g_sampleBufFull = true;
+  // ── ADC con promedio rápido de 5 muestras (lectura inmediata sin lag de 20s) ──
+  long soilSum = 0;
+  long waterSum = 0;
+  for (int i = 0; i < 5; i++) {
+    soilSum += analogRead(PIN_SOIL);
+    waterSum += analogRead(PIN_SHARP);
+    delay(4);
+  }
+  g_sensors.soilADC  = (int)(soilSum / 5);
+  g_sensors.waterADC = (int)(waterSum / 5);
 
-  int samplesToUse = g_sampleBufFull ? ADC_SAMPLES : g_sampleIndex;
-  g_sensors.soilADC  = (int)smoothADC(g_soilSamples, samplesToUse);
-  g_sensors.waterADC = (int)smoothADC(g_waterSamples, samplesToUse);
-
-  // ── Conversión a porcentajes ──
+  // ── Conversión a porcentajes calibrados ──
   g_sensors.soilPct  = adcToSoilPercent(g_sensors.soilADC);
   g_sensors.waterPct = adcToWaterPercent(g_sensors.waterADC);
 
-  // Debug
-  #ifdef DEBUG_SENSORS
-  Serial.print(F("[SENS] T=")); Serial.print(g_sensors.temperature, 1);
-  Serial.print(F("C H=")); Serial.print(g_sensors.humidity, 1);
-  Serial.print(F("% Soil=")); Serial.print(g_sensors.soilPct, 1);
-  Serial.print(F("% Water=")); Serial.print(g_sensors.waterPct, 1);
-  Serial.println(F("%"));
-  #endif
+  // Monitor serie en tiempo real
+  Serial.print(F("[SENS] Suelo: ADC=")); Serial.print(g_sensors.soilADC);
+  Serial.print(F(" (")); Serial.print(g_sensors.soilPct, 1);
+  Serial.print(F("%) | Agua: ADC=")); Serial.print(g_sensors.waterADC);
+  Serial.print(F(" (")); Serial.print(g_sensors.waterPct, 1);
+  Serial.println(F("%)"));
 }
 
 float smoothADC(int* buf, int len) {
@@ -435,21 +466,36 @@ float smoothADC(int* buf, int len) {
 }
 
 float adcToSoilPercent(int adc) {
-  // Sensor capacitivo: típicamente seco=4095, mojado=0 (o viceversa)
-  // Ajustar según calibración física
-  float pct = map(constrain(adc, 0, 4095), 0, 4095, 0, 100);
+  // Sensor capacitivo:
+  // soilMaxADC = Seco (al aire) -> 0% humedad
+  // soilMinADC = Mojado (en agua) -> 100% humedad
+  int wet = g_config.soilMinADC;
+  int dry = g_config.soilMaxADC;
+
+  if (dry <= wet) {
+    dry = 3200;
+    wet = 1400;
+  }
+
+  int val = constrain(adc, wet, dry);
+  float pct = (float)(dry - val) * 100.0f / (float)(dry - wet);
   return constrain(pct, 0.0f, 100.0f);
 }
 
 float adcToWaterPercent(int adc) {
-  // Sharp IR: mayor proximidad = mayor ADC = más agua
-  // Calibrar con tanque lleno/vacío
-  int minA = g_config.sharpMinADC;
-  int maxA = g_config.sharpMaxADC;
-  
-  if (minA >= maxA) return 50.0f;  // Sanity check
-  
-  float pct = map(constrain(adc, minA, maxA), maxA, minA, 0, 100);
+  // Sensor Sharp IR:
+  // sharpMinADC = Vacío (nivel de agua bajo / distancia lejana al sensor) -> 0%
+  // sharpMaxADC = Lleno (nivel de agua alto / distancia cercana al sensor) -> 100%
+  int empty = g_config.sharpMinADC;
+  int full  = g_config.sharpMaxADC;
+
+  if (full <= empty) {
+    empty = 800;
+    full  = 2500;
+  }
+
+  int val = constrain(adc, empty, full);
+  float pct = (float)(val - empty) * 100.0f / (float)(full - empty);
   return constrain(pct, 0.0f, 100.0f);
 }
 
@@ -466,18 +512,24 @@ void controlTemperature() {
   float t = g_sensors.temperature;
   if (t < -100.0f) return;  // Sensor inválido
 
-  VentState targetS1 = VENT_CLOSED;
-  VentState targetS2 = VENT_CLOSED;
+  // Usar límites calibrados de cada compuerta
+  int s1Closed = g_config.servo1Min;
+  int s1Open   = g_config.servo1Max;
+  int s2Closed = g_config.servo2Min;
+  int s2Open   = g_config.servo2Max;
+
+  int targetS1 = s1Closed;
+  int targetS2 = s2Closed;
 
   if (t > g_config.tempThresh2) {
-    targetS1 = VENT_OPEN;
-    targetS2 = VENT_OPEN;
+    targetS1 = s1Open;
+    targetS2 = s2Open;
   } else if (t > g_config.tempThresh1) {
-    targetS1 = VENT_OPEN;
-    targetS2 = VENT_CLOSED;
+    targetS1 = s1Open;
+    targetS2 = s2Closed;
   } else if (t < (g_config.tempThresh1 - TEMP_HYSTERESIS)) {
-    targetS1 = VENT_CLOSED;
-    targetS2 = VENT_CLOSED;
+    targetS1 = s1Closed;
+    targetS2 = s2Closed;
   }
 
   // Aplicar solo si cambió (evitar vibración de servos)
@@ -492,22 +544,23 @@ void controlTemperature() {
 }
 
 void controlIrrigation() {
-  bool soilDry   = g_sensors.soilPct < g_config.soilThresh;
-  bool hasWater  = g_sensors.waterPct > WATER_MIN_PCT;
-  bool pumpIdle  = !g_actuators.pumpOn;
+  bool soilDry     = g_sensors.soilPct < g_config.soilThresh;
+  bool hasWater    = g_sensors.waterPct > WATER_MIN_PCT;
+  bool pumpIdle    = !g_actuators.pumpOn;
+  bool cooldownOk  = (millis() - g_lastPumpStopMs > PUMP_COOLDOWN_MS);  // Cooldown definido en config.h
 
-  // Iniciar riego automático
-  if (pumpIdle && soilDry && hasWater) {
+  // Iniciar pulso de riego automático
+  if (pumpIdle && soilDry && hasWater && cooldownOk) {
     activatePump(true, true);
-    Serial.println(F("[AUTO] Riego iniciado (suelo seco + agua disponible)"));
+    Serial.println(F("[AUTO] Pulso de riego iniciado (1s activo)"));
   }
 
-  // Detener riego automático
+  // Detener riego automático si el suelo ya se humedeció
   if (g_actuators.pumpOn && g_actuators.pumpAuto) {
-    bool soilWetEnough = g_sensors.soilPct > (g_config.soilThresh + SOIL_HYSTERESIS);
+    bool soilWetEnough = g_sensors.soilPct >= g_config.soilThresh;
     if (soilWetEnough) {
       activatePump(false, true);
-      Serial.println(F("[AUTO] Riego detenido (suelo humedecido)"));
+      Serial.println(F("[AUTO] Riego detenido (humedad de suelo alcanzada)"));
     }
   }
 }
@@ -531,6 +584,7 @@ void activatePump(bool on, bool automatic) {
     g_actuators.pumpStartMs = millis();
     Serial.println(F("[PUMP] Bomba ENCENDIDA"));
   } else {
+    g_lastPumpStopMs = millis();
     Serial.println(F("[PUMP] Bomba APAGADA"));
   }
 }
@@ -545,12 +599,22 @@ void managePumpTimeout(unsigned long now) {
     return;
   }
 
-  unsigned long elapsed = now - g_actuators.pumpStartMs;
+  // Obtener tiempo fresco para evitar desincronización con el inicio de la bomba
+  unsigned long currentMs = millis();
+  if (currentMs < g_actuators.pumpStartMs) return; // Protección ante desfase/underflow
 
-  // Timeout de seguridad (evitar inundación)
-  if (elapsed >= (unsigned long)g_config.pumpDuration) {
+  unsigned long elapsed = currentMs - g_actuators.pumpStartMs;
+
+  // Duración del pulso de riego fijado en config.h (1 segundo)
+  unsigned long dur = PUMP_PULSE_MS;
+
+  if (elapsed >= dur) {
     activatePump(false, g_actuators.pumpAuto);
-    Serial.println(F("[PUMP] Timeout de seguridad activado"));
+    Serial.print(F("[PUMP] Pulso apagado ("));
+    Serial.print(elapsed / 1000.0, 1);
+    Serial.print(F("s). Pausa de absorción ("));
+    Serial.print(PUMP_COOLDOWN_MS / 1000);
+    Serial.println(F("s)..."));
   }
 }
 
@@ -558,16 +622,17 @@ void managePumpTimeout(unsigned long now) {
 // IMPLEMENTACIÓN: SERVOS PCA9685
 // ═══════════════════════════════════════════════════════════════════════════════
 
-void setServoAngle(uint8_t channel, uint16_t angle) {
+void setServoAngle(uint8_t channel, int angle) {
   if (!g_pcaOk) {
     Serial.println(F("[SERVO] Ignorado: PCA9685 no disponible"));
     return;
   }
-  uint16_t pulse = map(constrain(angle, 0, 180), 0, 180, SERVO_PULSE_MIN, SERVO_PULSE_MAX);
+  int clamped = constrain(angle, 0, 180);
+  uint16_t pulse = map(clamped, 0, 180, SERVO_PULSE_MIN, SERVO_PULSE_MAX);
   pca.setPWM(channel, 0, pulse);
   
   Serial.print(F("[SERVO] Canal ")); Serial.print(channel);
-  Serial.print(F(" -> ")); Serial.print(angle);
+  Serial.print(F(" -> ")); Serial.print(clamped);
   Serial.println(F("°"));
 }
 
@@ -584,6 +649,7 @@ void transmitTelemetry() {
   payload += "TEMP:" + String(g_sensors.temperature, 1) + "|";
   payload += "HUM:" + String(g_sensors.humidity, 1) + "|";
   payload += "SOIL:" + String(g_sensors.soilADC) + "|";
+  payload += "SOILPCT:" + String(g_sensors.soilPct, 1) + "|";
   payload += "WATER:" + String(g_sensors.waterADC) + "|";
   payload += "WLVL:" + String(g_sensors.waterPct, 1) + "|";
   payload += "S1:" + String(g_actuators.servo1Pos) + "|";
@@ -654,41 +720,251 @@ void processCommand(const String& cmd) {
     bool on = (valStr == "1");
     activatePump(on, false);
     sendACK("BOMBA");
-    
+
   } else if (act == "S1") {
-    int angle = constrain(valStr.toInt(), 0, 180);
+    // Restringir al rango calibrado
+    int angle = constrain(valStr.toInt(), g_config.servo1Min, g_config.servo1Max);
     setServoAngle(CHANNEL_SERVO_A, angle);
     g_actuators.servo1Pos = angle;
     sendACK("S1");
-    
+
   } else if (act == "S2") {
-    int angle = constrain(valStr.toInt(), 0, 180);
+    int angle = constrain(valStr.toInt(), g_config.servo2Min, g_config.servo2Max);
     setServoAngle(CHANNEL_SERVO_B, angle);
     g_actuators.servo2Pos = angle;
     sendACK("S2");
-    
+
   } else if (act == "MODE") {
     if (valStr == "AUTO") {
       g_mode = MODE_AUTO;
       g_manualOverrideUntil = 0;
       Serial.println(F("[CMD] Modo cambiado a AUTO"));
+    } else if (valStr == "MANUAL") {
+      g_mode = MODE_MANUAL;
+      Serial.println(F("[CMD] Modo cambiado a MANUAL"));
     } else if (valStr == "SLEEP") {
       g_mode = MODE_SLEEP;
       Serial.println(F("[CMD] Modo cambiado a SLEEP"));
     }
     sendACK("MODE");
-    
+
   } else if (act == "CAL") {
-    // Comando de calibración: CAL:SHARP_MIN:500
-    // Futuro: implementar calibración remota
-    Serial.println(F("[CMD] Calibración recibida (pendiente implementar)"));
-    sendACK("CAL");
+    // Formato VAL: PARAMETRO:valor  (ej. S1MIN:5, SOILMAX:3900)
+    // Si valor = "NOW", captura la lectura ADC actual del sensor
+    int sep = valStr.indexOf(':');
+    if (sep > 0) {
+      String param = valStr.substring(0, sep);
+      String valorStr = valStr.substring(sep + 1);
+      int valor = valorStr.toInt();
+
+      if      (param == "S1MIN")    g_config.servo1Min = valor;
+      else if (param == "S1MAX")    g_config.servo1Max = valor;
+      else if (param == "S2MIN")    g_config.servo2Min = valor;
+      else if (param == "S2MAX")    g_config.servo2Max = valor;
+      else if (param == "SOILMIN")  g_config.soilMinADC  = (valorStr == "NOW") ? g_sensors.soilADC  : valor;
+      else if (param == "SOILMAX")  g_config.soilMaxADC  = (valorStr == "NOW") ? g_sensors.soilADC  : valor;
+      else if (param == "SHARPMIN") g_config.sharpMinADC = (valorStr == "NOW") ? g_sensors.waterADC : valor;
+      else if (param == "SHARPMAX") g_config.sharpMaxADC = (valorStr == "NOW") ? g_sensors.waterADC : valor;
+      else {
+        Serial.print(F("[CAL] Parámetro desconocido: "));
+        Serial.println(param);
+        sendACK("CAL_ERR");
+        return;
+      }
+
+      saveCalibration();
+      Serial.print(F("[CAL] "));
+      Serial.print(param);
+      Serial.print(F(" = "));
+      Serial.println(valorStr == "NOW" ? String((param.startsWith("SOIL") ? g_sensors.soilADC : g_sensors.waterADC)) : String(valor));
+      sendACK("CAL");
+    }
+  } else if (act == "S1RAW") {
+    // Movimiento libre (sin límite calibrado) — solo para menú de calibración
+    int angle = constrain(valStr.toInt(), 0, 180);
+    setServoAngle(CHANNEL_SERVO_A, angle);
+    g_actuators.servo1Pos = angle;
+    sendACK("S1RAW");
+
+  } else if (act == "S2RAW") {
+    int angle = constrain(valStr.toInt(), 0, 180);
+    setServoAngle(CHANNEL_SERVO_B, angle);
+    g_actuators.servo2Pos = angle;
+    sendACK("S2RAW");
   }
 }
 
 void sendACK(const String& act) {
   g_telemetry.lastACK = act;
   Serial.print(F("[ACK] Comando confirmado: ")); Serial.println(act);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSOLA SERIAL DE CALIBRACIÓN INTERACTIVA
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void printCalibrationStatus() {
+  Serial.println(F("\n══════════ [ESTADO Y CALIBRACIÓN ACTUAL] ══════════"));
+  Serial.print(F(" ADC Suelo actual : ")); Serial.print(g_sensors.soilADC);
+  Serial.print(F(" -> Humedad calculada: ")); Serial.print(g_sensors.soilPct, 1); Serial.println(F("%"));
+  Serial.print(F("   [Calibración Suelo] SECO (0%): ")); Serial.print(g_config.soilMaxADC);
+  Serial.print(F(" | MOJADO (100%): ")); Serial.println(g_config.soilMinADC);
+
+  Serial.print(F(" ADC Agua actual  : ")); Serial.print(g_sensors.waterADC);
+  Serial.print(F(" -> Nivel calculado: ")); Serial.print(g_sensors.waterPct, 1); Serial.println(F("%"));
+  Serial.print(F("   [Calibración Agua]  VACÍO (0%): ")); Serial.print(g_config.sharpMinADC);
+  Serial.print(F(" | LLENO (100%): ")); Serial.println(g_config.sharpMaxADC);
+  
+  Serial.print(F(" Temperatura: ")); Serial.print(g_sensors.temperature, 1);
+  Serial.print(F(" °C | Humedad aire: ")); Serial.print(g_sensors.humidity, 1); Serial.println(F(" %"));
+  Serial.print(F(" Bomba: ")); Serial.print(g_actuators.pumpOn ? F("ON") : F("OFF"));
+  Serial.print(F(" | Compuertas V1: ")); Serial.print(g_actuators.servo1Pos);
+  Serial.print(F("° | V2: ")); Serial.print(g_actuators.servo2Pos); Serial.println(F("°"));
+  Serial.println(F("═══════════════════════════════════════════════════\n"));
+}
+
+void printHelpMenu() {
+  Serial.println(F("\n╔══════════════════════════════════════════════════════════════════╗"));
+  Serial.println(F("║           COMANDOS DE CALIBRACIÓN POR PUERTO SERIAL              ║"));
+  Serial.println(F("╠══════════════════════════════════════════════════════════════════╣"));
+  Serial.println(F("║  'seco'   ó 'dry'   -> Calibra el suelo actual como SECO (0%)    ║"));
+  Serial.println(F("║  'mojado' ó 'wet'   -> Calibra el suelo actual como MOJADO (100%)║"));
+  Serial.println(F("║  'vacio'  ó 'empty' -> Calibra el agua actual como VACÍO (0%)    ║"));
+  Serial.println(F("║  'lleno'  ó 'full'  -> Calibra el agua actual como LLENO (100%)  ║"));
+  Serial.println(F("║  'auto'             -> Activa modo autónomo (riego automático)   ║"));
+  Serial.println(F("║  'manual'           -> Activa modo manual (riego pausado)        ║"));
+  Serial.println(F("║  'bomba on'/'off'   -> Prueba encendido manual de la bomba       ║"));
+  Serial.println(F("║  'abrir' / 'cerrar' -> Prueba compuertas abiertas / cerradas     ║"));
+  Serial.println(F("║  's1 90' / 's2 0'   -> Mueve un servo a cualquier ángulo (0-180) ║"));
+  Serial.println(F("║  'status'           -> Muestra los valores ADC y calibración     ║"));
+  Serial.println(F("║  'dur:10'           -> Ajusta segundos de riego (ej: dur:15)     ║"));
+  Serial.println(F("║  'reset'            -> Restaura valores por defecto seguros      ║"));
+  Serial.println(F("║  O manual: 's1_closed:90', 's1_open:0', 's2_closed:90', etc.     ║"));
+  Serial.println(F("╚══════════════════════════════════════════════════════════════════╝\n"));
+}
+
+void handleSerialConsole() {
+  if (!Serial.available()) return;
+
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  if (line.length() == 0) return;
+
+  String cmd = line;
+  cmd.toLowerCase();
+
+  if (cmd == "seco" || cmd == "dry" || cmd == "cal soil dry") {
+    g_config.soilMaxADC = g_sensors.soilADC;
+    saveCalibration();
+    Serial.print(F("✅ [CAL] Suelo SECO (0%) calibrado a ADC = "));
+    Serial.println(g_config.soilMaxADC);
+    printCalibrationStatus();
+
+  } else if (cmd == "mojado" || cmd == "wet" || cmd == "cal soil wet") {
+    g_config.soilMinADC = g_sensors.soilADC;
+    saveCalibration();
+    Serial.print(F("✅ [CAL] Suelo MOJADO (100%) calibrado a ADC = "));
+    Serial.println(g_config.soilMinADC);
+    printCalibrationStatus();
+
+  } else if (cmd == "vacio" || cmd == "empty" || cmd == "cal water empty") {
+    g_config.sharpMinADC = g_sensors.waterADC;
+    saveCalibration();
+    Serial.print(F("✅ [CAL] Estanque VACÍO (0%) calibrado a ADC = "));
+    Serial.println(g_config.sharpMinADC);
+    printCalibrationStatus();
+
+  } else if (cmd == "lleno" || cmd == "full" || cmd == "cal water full") {
+    g_config.sharpMaxADC = g_sensors.waterADC;
+    saveCalibration();
+    Serial.print(F("✅ [CAL] Estanque LLENO (100%) calibrado a ADC = "));
+    Serial.println(g_config.sharpMaxADC);
+    printCalibrationStatus();
+
+  } else if (cmd == "auto") {
+    g_mode = MODE_AUTO;
+    g_manualOverrideUntil = 0;
+    Serial.println(F("🤖 [MODO] Cambiado a AUTO (Riego automático activado)"));
+    printCalibrationStatus();
+
+  } else if (cmd == "manual") {
+    g_mode = MODE_MANUAL;
+    activatePump(false, false);
+    Serial.println(F("🖐️ [MODO] Cambiado a MANUAL (Riego automático pausado)"));
+    printCalibrationStatus();
+
+  } else if (cmd == "bomba on" || cmd == "pump on" || cmd == "regar") {
+    activatePump(true, false);
+    Serial.println(F("⚡ [BOMBA] Encendida manualmente"));
+
+  } else if (cmd == "bomba off" || cmd == "pump off" || cmd == "parar") {
+    activatePump(false, false);
+    Serial.println(F("⚡ [BOMBA] Apagada"));
+
+  } else if (cmd.startsWith("s1 ")) {
+    int ang = cmd.substring(3).toInt();
+    setServoAngle(CHANNEL_SERVO_A, ang);
+    Serial.print(F("🎮 [TEST] Servo 1 movido a ")); Serial.print(ang); Serial.println(F("°"));
+
+  } else if (cmd.startsWith("s2 ")) {
+    int ang = cmd.substring(3).toInt();
+    setServoAngle(CHANNEL_SERVO_B, ang);
+    Serial.print(F("🎮 [TEST] Servo 2 movido a ")); Serial.print(ang); Serial.println(F("°"));
+
+  } else if (cmd == "abrir") {
+    setServoAngle(CHANNEL_SERVO_A, g_config.servo1Max);
+    setServoAngle(CHANNEL_SERVO_B, g_config.servo2Max);
+    g_actuators.servo1Pos = g_config.servo1Max;
+    g_actuators.servo2Pos = g_config.servo2Max;
+    Serial.println(F("🔓 Compuertas ABIERTAS"));
+
+  } else if (cmd == "cerrar") {
+    setServoAngle(CHANNEL_SERVO_A, g_config.servo1Min);
+    setServoAngle(CHANNEL_SERVO_B, g_config.servo2Min);
+    g_actuators.servo1Pos = g_config.servo1Min;
+    g_actuators.servo2Pos = g_config.servo2Min;
+    Serial.println(F("🔒 Compuertas CERRADAS"));
+
+  } else if (cmd == "status" || cmd == "cal" || cmd == "estado") {
+    printCalibrationStatus();
+
+  } else if (cmd == "help" || cmd == "ayuda" || cmd == "?") {
+    printHelpMenu();
+
+  } else if (cmd == "reset") {
+    g_config.soilMinADC  = 1400;
+    g_config.soilMaxADC  = 3200;
+    g_config.sharpMinADC = 800;
+    g_config.sharpMaxADC = 2500;
+    saveCalibration();
+    Serial.println(F("🔄 [CAL] Calibración restablecida a valores seguros de fábrica."));
+    printCalibrationStatus();
+
+  } else if (cmd.indexOf(':') > 0) {
+    int sep = cmd.indexOf(':');
+    String k = cmd.substring(0, sep);
+    int val = cmd.substring(sep + 1).toInt();
+    if (k == "soil_dry")        { g_config.soilMaxADC  = val; saveCalibration(); Serial.println(F("✅ Suelo seco actualizado")); }
+    else if (k == "soil_wet")   { g_config.soilMinADC  = val; saveCalibration(); Serial.println(F("✅ Suelo mojado actualizado")); }
+    else if (k == "water_empty"){ g_config.sharpMinADC = val; saveCalibration(); Serial.println(F("✅ Agua vacía actualizada")); }
+    else if (k == "water_full") { g_config.sharpMaxADC = val; saveCalibration(); Serial.println(F("✅ Agua llena actualizada")); }
+    else if (k == "s1_closed")  { g_config.servo1Min   = val; saveCalibration(); Serial.println(F("✅ S1 Cerrada actualizado")); }
+    else if (k == "s1_open")    { g_config.servo1Max   = val; saveCalibration(); Serial.println(F("✅ S1 Abierta actualizado")); }
+    else if (k == "s2_closed")  { g_config.servo2Min   = val; saveCalibration(); Serial.println(F("✅ S2 Cerrada actualizado")); }
+    else if (k == "s2_open")    { g_config.servo2Max   = val; saveCalibration(); Serial.println(F("✅ S2 Abierta actualizado")); }
+    else if (k == "dur" || k == "pump_dur") {
+      g_config.pumpDuration = (val < 100) ? (val * 1000) : val;
+      saveCalibration();
+      Serial.print(F("✅ Duración de riego actualizada a "));
+      Serial.print(g_config.pumpDuration / 1000);
+      Serial.println(F(" segundos (guardado en NVS)"));
+    }
+    else { Serial.println(F("❌ Comando manual no reconocido. Escribe 'ayuda'.")); }
+    printCalibrationStatus();
+
+  } else {
+    Serial.print(F("Comando no reconocido: '")); Serial.print(line); Serial.println(F("'. Escribe 'ayuda' para ver opciones."));
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

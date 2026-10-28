@@ -70,10 +70,14 @@
 // INTERVALOS DE TIEMPO (ms)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#define SENSOR_INTERVAL_MS 2000 // Lectura sensores cada 2s
+#define SENSOR_INTERVAL_MS 1000 // Lectura sensores cada 1s (detección ágil de humedad)
 #define TX_INTERVAL_MS 5000     // Transmisión LoRa cada 5s
 #define DISPLAY_INTERVAL_MS 500 // Refresh OLED cada 500ms
 #define SYNC_TIMEOUT_MS 10000   // Timeout sync hora 10s
+
+// ── Control de Riego por Pulsos (Invernadero pequeño) ──
+#define PUMP_PULSE_MS    1000   // TIEMPO ENCENDIDA: 1 segundo de agua por pulso
+#define PUMP_COOLDOWN_MS 2000   // TIEMPO APAGADA:   2 segundos de pausa/absorción entre pulsos
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PARÁMETROS DE CONTROL
@@ -103,12 +107,18 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 struct ConfigData {
-  int sharpMinADC = 500;     // ADC con tanque lleno
-  int sharpMaxADC = 3500;    // ADC con tanque vacío
+  int sharpMinADC = 800;     // ADC con tanque vacío (distancia lejana = voltaje bajo)
+  int sharpMaxADC = 2500;    // ADC con tanque lleno (distancia cercana = voltaje alto)
+  int soilMinADC  = 1400;    // ADC suelo mojado (en agua = capacitancia alta, voltaje bajo)
+  int soilMaxADC  = 3200;    // ADC suelo seco (en aire = capacitancia baja, voltaje alto)
+  int servo1Min   = 0;       // Grados mínimos compuerta A (calibración)
+  int servo1Max   = 90;      // Grados máximos compuerta A
+  int servo2Min   = 0;       // Grados mínimos compuerta B
+  int servo2Max   = 90;      // Grados máximos compuerta B
   float tempThresh1 = 28.0f; // °C - Abrir compuerta A
   float tempThresh2 = 32.0f; // °C - Abrir compuerta B también
   float soilThresh = 40.0f;  // %  - Umbral riego
-  int pumpDuration = 10000;  // ms - Duración máxima riego
+  int pumpDuration = 1000;   // ms - Duración de pulso de riego (1 segundo)
 };
 
 extern ConfigData g_config;
