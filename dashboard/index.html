@@ -353,6 +353,51 @@
       flex-wrap: wrap;
     }
 
+    /* Mode Selector Panel & Buttons */
+    .mode-selector-panel {
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin-bottom: 16px;
+    }
+    .mode-buttons-group {
+      display: inline-flex;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 3px;
+      gap: 4px;
+    }
+    .btn-mode {
+      padding: 8px 16px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-mode:hover {
+      color: var(--text-primary);
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .btn-mode.active-auto {
+      background: var(--accent-green) !important;
+      color: white !important;
+      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
+    }
+    .btn-mode.active-manual {
+      background: var(--accent-amber) !important;
+      color: #0f172a !important;
+      box-shadow: 0 2px 8px rgba(245, 158, 11, 0.35);
+    }
+
     /* Mode Badges & Banner */
     .mode-badge {
       display: inline-flex;
@@ -650,34 +695,51 @@
       <!-- Controls -->
       <div class="section">
         <div class="section-header">
-          <h3 class="section-title">🎮 Control y Modos</h3>
-          <div style="display:flex; align-items:center; gap:8px;">
-            <span id="badgeCurrentMode" class="mode-badge mode-badge-auto">🤖 MODO AUTO</span>
-            <button class="btn btn-secondary" id="btnReactivateAuto" style="padding:6px 12px; font-size:0.8rem; display:none;" onclick="reactivateAutoMode()">🔄 Reactivar Auto</button>
+          <h3 class="section-title">🎮 Control y Modos del Invernadero</h3>
+          <span id="badgeCurrentMode" class="mode-badge mode-badge-auto">🤖 MODO AUTO</span>
+        </div>
+
+        <!-- Panel de Selección de Modo -->
+        <div class="mode-selector-panel">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div>
+              <div style="font-size:0.95rem; font-weight:700; color:var(--text-primary); margin-bottom:2px;">
+                Selección de Modo:
+              </div>
+              <div id="modeDescription" style="font-size:0.8rem; color:var(--text-muted);">
+                Control inteligente activo: Sensores regulan automáticamente temperatura y riego.
+              </div>
+            </div>
+
+            <!-- Botones explícitos de modo -->
+            <div class="mode-buttons-group">
+              <button type="button" class="btn-mode active-auto" id="btnModeAuto" onclick="selectMode('AUTO')">
+                🤖 Automático
+              </button>
+              <button type="button" class="btn-mode" id="btnModeManual" onclick="selectMode('MANUAL')">
+                🖐️ Manual
+              </button>
+            </div>
           </div>
         </div>
 
         <div id="modeAlertBanner" class="mode-alert">
           <span>⚠️ <strong>Modo Manual activo:</strong> Actuadores bajo control manual. La regulación automática por temperatura y suelo está pausada.</span>
-          <button class="btn btn-primary" style="padding:5px 12px; font-size:0.8rem; white-space:nowrap;" onclick="reactivateAutoMode()">Reactivar Modo Auto</button>
+          <button class="btn btn-primary" style="padding:5px 12px; font-size:0.8rem; white-space:nowrap;" onclick="selectMode('AUTO')">Reactivar Modo Auto</button>
         </div>
 
         <div class="controls-grid">
           <div class="control-group">
-            <h4>💧 Bomba de Riego</h4>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <h4 style="margin-bottom:0;">💧 Bomba de Riego</h4>
+              <span id="pumpManualHint" style="display:none; font-size:0.75rem; color:#f59e0b; font-weight:600;">Manual</span>
+            </div>
             <div class="control-row">
-              <button class="btn btn-primary" id="btnPumpOn" onclick="triggerManualPump('1')">Encender</button>
+              <button class="btn btn-primary" id="btnPumpOn" onclick="triggerManualPump('1')">Encender (1s)</button>
               <button class="btn btn-danger" id="btnPumpOff" onclick="triggerManualPump('0')">Apagar</button>
             </div>
-            <div style="margin-top:14px; display:flex; align-items:center; justify-content:space-between; padding-top:10px; border-top:1px solid rgba(255,255,255,0.06);">
-              <div>
-                <div id="lblModeStatus" style="font-size:0.85rem; font-weight:600; color:var(--text-primary);">Modo Automático</div>
-                <div style="font-size:0.75rem; color:var(--text-muted);">Control inteligente por sensores</div>
-              </div>
-              <label class="toggle-switch">
-                <input type="checkbox" id="autoMode" checked onchange="handleModeToggle(this.checked)">
-                <span class="toggle-slider"></span>
-              </label>
+            <div style="margin-top:12px; font-size:0.75rem; color:var(--text-muted);">
+              En manual emite pulso controlado de riego sin esperar al umbral de suelo.
             </div>
           </div>
           <div class="control-group">
@@ -1052,9 +1114,12 @@
         }
       }
 
-      // Sincronizar modo recibido en telemetría
+      // Sincronizar modo recibido en telemetría (respetando interacción reciente del usuario < 30s)
       if (data.mode) {
-        setModeUI(data.mode);
+        const timeSinceUserMode = Date.now() - (userInteracting.MODE || 0);
+        if (timeSinceUserMode > 30000 || data.mode === currentMode) {
+          setModeUI(data.mode);
+        }
       }
     }
 
@@ -1263,7 +1328,8 @@
     }
 
     // Estado de interacción de usuario para evitar parpadeos/reseteos por telemetría
-    let userInteracting = { S1: 0, S2: 0, BOMBA: 0 };
+    let currentMode = 'AUTO';
+    let userInteracting = { S1: 0, S2: 0, BOMBA: 0, MODE: 0 };
     let isDragging = { S1: false, S2: false };
 
     function onSliderStart(id) {
@@ -1280,55 +1346,72 @@
     function onSliderChange(id, val) {
       isDragging[id] = false;
       userInteracting[id] = Date.now();
+      userInteracting.MODE = Date.now();
       document.getElementById('val' + id).textContent = val + '°';
-      // Ajustar manualmente una compuerta pasa a modo MANUAL
+      // Ajustar manualmente una compuerta pasa de inmediato a modo MANUAL
       setModeUI('MANUAL');
       sendCommand(id, val);
     }
 
     function triggerManualPump(state) {
       userInteracting.BOMBA = Date.now();
+      userInteracting.MODE = Date.now();
       setModeUI('MANUAL');
       sendCommand('BOMBA', state);
     }
 
-    function handleModeToggle(checked) {
-      setModeUI(checked ? 'AUTO' : 'MANUAL');
-      sendCommand('MODE', checked ? 'AUTO' : 'MANUAL');
-    }
-
-    function reactivateAutoMode() {
-      setModeUI('AUTO');
-      sendCommand('MODE', 'AUTO');
-      showToast('🤖 Modo Automático reactivado', 'success');
+    function selectMode(targetMode) {
+      currentMode = targetMode;
+      userInteracting.MODE = Date.now();
+      setModeUI(targetMode);
+      sendCommand('MODE', targetMode);
+      if (targetMode === 'AUTO') {
+        showToast('🤖 Solicitando Modo Automático...', 'info');
+      } else {
+        showToast('🖐️ Solicitando Modo Manual...', 'info');
+      }
     }
 
     function setModeUI(mode) {
+      currentMode = mode;
       const isAuto = (mode === 'AUTO');
       const badge = document.getElementById('badgeCurrentMode');
-      const btnReactivate = document.getElementById('btnReactivateAuto');
+      const btnAuto = document.getElementById('btnModeAuto');
+      const btnManual = document.getElementById('btnModeManual');
+      const desc = document.getElementById('modeDescription');
       const banner = document.getElementById('modeAlertBanner');
-      const chk = document.getElementById('autoMode');
-      const lbl = document.getElementById('lblModeStatus');
       const hintS1 = document.getElementById('s1ManualHint');
       const hintS2 = document.getElementById('s2ManualHint');
+      const hintPump = document.getElementById('pumpManualHint');
 
-      if (chk) chk.checked = isAuto;
-      if (lbl) lbl.textContent = isAuto ? 'Modo Automático (Activo)' : 'Modo Manual (Pausa auto)';
+      if (btnAuto && btnManual) {
+        if (isAuto) {
+          btnAuto.className = 'btn-mode active-auto';
+          btnManual.className = 'btn-mode';
+        } else {
+          btnAuto.className = 'btn-mode';
+          btnManual.className = 'btn-mode active-manual';
+        }
+      }
+
+      if (desc) {
+        desc.textContent = isAuto 
+          ? 'Control inteligente activo: Sensores regulan automáticamente temperatura y riego.'
+          : 'Control manual activo: Regulación automática pausada. Los actuadores responden a tus comandos.';
+        desc.style.color = isAuto ? 'var(--text-muted)' : 'var(--accent-amber)';
+      }
 
       if (badge) {
         badge.className = isAuto ? 'mode-badge mode-badge-auto' : 'mode-badge mode-badge-manual';
         badge.innerHTML = isAuto ? '🤖 MODO AUTO' : '🖐️ MODO MANUAL';
       }
 
-      if (btnReactivate) {
-        btnReactivate.style.display = isAuto ? 'none' : 'inline-block';
-      }
       if (banner) {
         banner.style.display = isAuto ? 'none' : 'flex';
       }
       if (hintS1) hintS1.style.display = isAuto ? 'none' : 'inline';
       if (hintS2) hintS2.style.display = isAuto ? 'none' : 'inline';
+      if (hintPump) hintPump.style.display = isAuto ? 'none' : 'inline';
     }
 
     function updateSlider(id, value) {

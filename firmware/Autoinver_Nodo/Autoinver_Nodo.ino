@@ -717,6 +717,11 @@ void processCommand(const String& cmd) {
   if (valEnd < 0) valEnd = cmd.length();
   String valStr = cmd.substring(valIdx, valEnd);
 
+  act.trim();
+  act.toUpperCase();
+  valStr.trim();
+  valStr.toUpperCase();
+
   g_lastCommand = act + ":" + valStr;
   
   if (act != "MODE") {
@@ -750,7 +755,10 @@ void processCommand(const String& cmd) {
     if (valStr == "AUTO") {
       g_mode = MODE_AUTO;
       g_manualOverrideUntil = 0;
-      Serial.println(F("[CMD] Modo cambiado a AUTO"));
+      Serial.println(F("[CMD] ✅ Modo cambiado a AUTO"));
+      if (g_actuators.pumpOn && !g_actuators.pumpAuto) {
+        activatePump(false, false);
+      }
       runControlLogic();
     } else if (valStr == "MANUAL") {
       g_mode = MODE_MANUAL;

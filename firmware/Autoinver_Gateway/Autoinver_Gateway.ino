@@ -1142,18 +1142,26 @@ void pollComandosPendientes() {
     // Enviar al nodo por LoRa
     enviarComandoLoRa(action, value);
 
+    String actionUpper = action;
+    actionUpper.trim();
+    actionUpper.toUpperCase();
+
+    String valueUpper = value;
+    valueUpper.trim();
+    valueUpper.toUpperCase();
+
     // Actualizar estado local inmediatamente para reflejar el cambio
-    if (action == "BOMBA" || action == "PUMP") {
-      g_node.pump = (value == "1");
+    if (actionUpper == "BOMBA" || actionUpper == "PUMP") {
+      g_node.pump = (valueUpper == "1");
       g_node.mode = "MANUAL";
-    } else if (action == "S1") {
+    } else if (actionUpper == "S1") {
       g_node.s1 = value.toInt();
       g_node.mode = "MANUAL";
-    } else if (action == "S2") {
+    } else if (actionUpper == "S2") {
       g_node.s2 = value.toInt();
       g_node.mode = "MANUAL";
-    } else if (action == "MODE") {
-      g_node.mode = value;
+    } else if (actionUpper == "MODE") {
+      g_node.mode = valueUpper;
     }
 
     // Marcar como ACK en Supabase
