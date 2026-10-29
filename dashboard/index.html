@@ -353,6 +353,42 @@
       flex-wrap: wrap;
     }
 
+    /* Mode Badges & Banner */
+    .mode-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .mode-badge-auto {
+      background: rgba(16, 185, 129, 0.15);
+      color: #10b981;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .mode-badge-manual {
+      background: rgba(245, 158, 11, 0.15);
+      color: #f59e0b;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+    .mode-alert {
+      display: none;
+      margin-bottom: 16px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      font-size: 0.82rem;
+      color: #fbbf24;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
     /* Toggle Switch */
     .toggle-switch {
       display: flex;
@@ -614,34 +650,63 @@
       <!-- Controls -->
       <div class="section">
         <div class="section-header">
-          <h3 class="section-title">🎮 Control Manual</h3>
+          <h3 class="section-title">🎮 Control y Modos</h3>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span id="badgeCurrentMode" class="mode-badge mode-badge-auto">🤖 MODO AUTO</span>
+            <button class="btn btn-secondary" id="btnReactivateAuto" style="padding:6px 12px; font-size:0.8rem; display:none;" onclick="reactivateAutoMode()">🔄 Reactivar Auto</button>
+          </div>
         </div>
+
+        <div id="modeAlertBanner" class="mode-alert">
+          <span>⚠️ <strong>Modo Manual activo:</strong> Actuadores bajo control manual. La regulación automática por temperatura y suelo está pausada.</span>
+          <button class="btn btn-primary" style="padding:5px 12px; font-size:0.8rem; white-space:nowrap;" onclick="reactivateAutoMode()">Reactivar Modo Auto</button>
+        </div>
+
         <div class="controls-grid">
           <div class="control-group">
             <h4>💧 Bomba de Riego</h4>
             <div class="control-row">
-              <button class="btn btn-primary" id="btnPumpOn" onclick="sendCommand('BOMBA', '1')">Encender</button>
-              <button class="btn btn-danger" id="btnPumpOff" onclick="sendCommand('BOMBA', '0')">Apagar</button>
+              <button class="btn btn-primary" id="btnPumpOn" onclick="triggerManualPump('1')">Encender</button>
+              <button class="btn btn-danger" id="btnPumpOff" onclick="triggerManualPump('0')">Apagar</button>
             </div>
-            <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
+            <div style="margin-top:14px; display:flex; align-items:center; justify-content:space-between; padding-top:10px; border-top:1px solid rgba(255,255,255,0.06);">
+              <div>
+                <div id="lblModeStatus" style="font-size:0.85rem; font-weight:600; color:var(--text-primary);">Modo Automático</div>
+                <div style="font-size:0.75rem; color:var(--text-muted);">Control inteligente por sensores</div>
+              </div>
               <label class="toggle-switch">
-                <input type="checkbox" id="autoMode" checked onchange="sendCommand('MODE', this.checked ? 'AUTO' : 'MANUAL')">
+                <input type="checkbox" id="autoMode" checked onchange="handleModeToggle(this.checked)">
                 <span class="toggle-slider"></span>
               </label>
-              <span style="font-size:0.85rem; color:var(--text-secondary);">Modo Automático</span>
             </div>
           </div>
           <div class="control-group">
-            <h4>🪟 Compuerta A</h4>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <h4 style="margin-bottom:0;">🪟 Compuerta A</h4>
+              <span id="s1ManualHint" style="display:none; font-size:0.75rem; color:#f59e0b; font-weight:600;">Manual</span>
+            </div>
             <div class="slider-control">
-              <input type="range" id="sliderS1" min="0" max="90" value="0" oninput="updateSlider('S1', this.value)" onchange="sendCommand('S1', this.value)">
+              <input type="range" id="sliderS1" min="0" max="90" value="0" 
+                     onpointerdown="onSliderStart('S1')"
+                     onmousedown="onSliderStart('S1')"
+                     ontouchstart="onSliderStart('S1')"
+                     oninput="onSliderInput('S1', this.value)" 
+                     onchange="onSliderChange('S1', this.value)">
               <div class="slider-value" id="valS1">0°</div>
             </div>
           </div>
           <div class="control-group">
-            <h4>🪟 Compuerta B</h4>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <h4 style="margin-bottom:0;">🪟 Compuerta B</h4>
+              <span id="s2ManualHint" style="display:none; font-size:0.75rem; color:#f59e0b; font-weight:600;">Manual</span>
+            </div>
             <div class="slider-control">
-              <input type="range" id="sliderS2" min="0" max="90" value="0" oninput="updateSlider('S2', this.value)" onchange="sendCommand('S2', this.value)">
+              <input type="range" id="sliderS2" min="0" max="90" value="0" 
+                     onpointerdown="onSliderStart('S2')"
+                     onmousedown="onSliderStart('S2')"
+                     ontouchstart="onSliderStart('S2')"
+                     oninput="onSliderInput('S2', this.value)" 
+                     onchange="onSliderChange('S2', this.value)">
               <div class="slider-value" id="valS2">0°</div>
             </div>
           </div>
@@ -972,19 +1037,24 @@
         document.getElementById('metaRSSI').textContent = 'Señal ' + quality;
       }
 
-      // Actualizar sliders si hay datos de servos
-      if (data.servo1_pos !== undefined) {
-        document.getElementById('sliderS1').value = data.servo1_pos;
-        document.getElementById('valS1').textContent = data.servo1_pos + '°';
+      // Actualizar sliders solo si el usuario no los está moviendo ni envió comando recientemente (< 15s)
+      const now = Date.now();
+      if (!isDragging.S1 && (now - userInteracting.S1 > 15000)) {
+        if (data.servo1_pos !== undefined && data.servo1_pos !== null) {
+          document.getElementById('sliderS1').value = data.servo1_pos;
+          document.getElementById('valS1').textContent = data.servo1_pos + '°';
+        }
       }
-      if (data.servo2_pos !== undefined) {
-        document.getElementById('sliderS2').value = data.servo2_pos;
-        document.getElementById('valS2').textContent = data.servo2_pos + '°';
+      if (!isDragging.S2 && (now - userInteracting.S2 > 15000)) {
+        if (data.servo2_pos !== undefined && data.servo2_pos !== null) {
+          document.getElementById('sliderS2').value = data.servo2_pos;
+          document.getElementById('valS2').textContent = data.servo2_pos + '°';
+        }
       }
 
-      // Modo auto
+      // Sincronizar modo recibido en telemetría
       if (data.mode) {
-        document.getElementById('autoMode').checked = (data.mode === 'AUTO');
+        setModeUI(data.mode);
       }
     }
 
@@ -1190,6 +1260,75 @@
       } catch (err) {
         showToast('❌ No se pudo enviar el comando', 'error');
       }
+    }
+
+    // Estado de interacción de usuario para evitar parpadeos/reseteos por telemetría
+    let userInteracting = { S1: 0, S2: 0, BOMBA: 0 };
+    let isDragging = { S1: false, S2: false };
+
+    function onSliderStart(id) {
+      isDragging[id] = true;
+      userInteracting[id] = Date.now();
+    }
+
+    function onSliderInput(id, val) {
+      isDragging[id] = true;
+      userInteracting[id] = Date.now();
+      document.getElementById('val' + id).textContent = val + '°';
+    }
+
+    function onSliderChange(id, val) {
+      isDragging[id] = false;
+      userInteracting[id] = Date.now();
+      document.getElementById('val' + id).textContent = val + '°';
+      // Ajustar manualmente una compuerta pasa a modo MANUAL
+      setModeUI('MANUAL');
+      sendCommand(id, val);
+    }
+
+    function triggerManualPump(state) {
+      userInteracting.BOMBA = Date.now();
+      setModeUI('MANUAL');
+      sendCommand('BOMBA', state);
+    }
+
+    function handleModeToggle(checked) {
+      setModeUI(checked ? 'AUTO' : 'MANUAL');
+      sendCommand('MODE', checked ? 'AUTO' : 'MANUAL');
+    }
+
+    function reactivateAutoMode() {
+      setModeUI('AUTO');
+      sendCommand('MODE', 'AUTO');
+      showToast('🤖 Modo Automático reactivado', 'success');
+    }
+
+    function setModeUI(mode) {
+      const isAuto = (mode === 'AUTO');
+      const badge = document.getElementById('badgeCurrentMode');
+      const btnReactivate = document.getElementById('btnReactivateAuto');
+      const banner = document.getElementById('modeAlertBanner');
+      const chk = document.getElementById('autoMode');
+      const lbl = document.getElementById('lblModeStatus');
+      const hintS1 = document.getElementById('s1ManualHint');
+      const hintS2 = document.getElementById('s2ManualHint');
+
+      if (chk) chk.checked = isAuto;
+      if (lbl) lbl.textContent = isAuto ? 'Modo Automático (Activo)' : 'Modo Manual (Pausa auto)';
+
+      if (badge) {
+        badge.className = isAuto ? 'mode-badge mode-badge-auto' : 'mode-badge mode-badge-manual';
+        badge.innerHTML = isAuto ? '🤖 MODO AUTO' : '🖐️ MODO MANUAL';
+      }
+
+      if (btnReactivate) {
+        btnReactivate.style.display = isAuto ? 'none' : 'inline-block';
+      }
+      if (banner) {
+        banner.style.display = isAuto ? 'none' : 'flex';
+      }
+      if (hintS1) hintS1.style.display = isAuto ? 'none' : 'inline';
+      if (hintS2) hintS2.style.display = isAuto ? 'none' : 'inline';
     }
 
     function updateSlider(id, value) {

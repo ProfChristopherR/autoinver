@@ -759,6 +759,7 @@ void procesarPaqueteLoRa() {
     doc["servo1_pos"] = g_node.s1;
     doc["servo2_pos"] = g_node.s2;
     doc["pump_state"] = g_node.pump;
+    doc["mode"] = g_node.mode;
     doc["rssi"] = rssi;
     doc["raw_payload"] = rx;
 
@@ -917,6 +918,7 @@ bool enviarTelemetriaActualSupabase() {
   doc["servo1_pos"] = g_node.s1;
   doc["servo2_pos"] = g_node.s2;
   doc["pump_state"] = g_node.pump;
+  doc["mode"] = g_node.mode;
   doc["rssi"] = g_node.rssi;
   doc["raw_payload"] = "live";
 
@@ -1143,10 +1145,13 @@ void pollComandosPendientes() {
     // Actualizar estado local inmediatamente para reflejar el cambio
     if (action == "BOMBA" || action == "PUMP") {
       g_node.pump = (value == "1");
+      g_node.mode = "MANUAL";
     } else if (action == "S1") {
       g_node.s1 = value.toInt();
+      g_node.mode = "MANUAL";
     } else if (action == "S2") {
       g_node.s2 = value.toInt();
+      g_node.mode = "MANUAL";
     } else if (action == "MODE") {
       g_node.mode = value;
     }
@@ -1512,10 +1517,13 @@ void handleApiV1Command() {
   // Actualizar estado local
   if (act == "BOMBA" || act == "PUMP") {
     g_node.pump = (val == "1");
+    g_node.mode = "MANUAL";
   } else if (act == "S1") {
     g_node.s1 = val.toInt();
+    g_node.mode = "MANUAL";
   } else if (act == "S2") {
     g_node.s2 = val.toInt();
+    g_node.mode = "MANUAL";
   } else if (act == "MODE") {
     g_node.mode = val;
   }

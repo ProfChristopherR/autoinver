@@ -220,6 +220,13 @@ void loop() {
   }
 
   // ── 2. Control automático (riego por pulsos y compuertas) ──
+  // Si expiró el tiempo de override manual temporal, volver automáticamente a AUTO
+  if (g_mode == MODE_MANUAL && g_manualOverrideUntil > 0 && now >= g_manualOverrideUntil) {
+    g_mode = MODE_AUTO;
+    g_manualOverrideUntil = 0;
+    Serial.println(F("[MODO] ⏰ Fin del override manual (10 min). Retornando automáticamente a modo AUTO."));
+  }
+
   if (g_mode == MODE_AUTO && now > g_manualOverrideUntil) {
     runControlLogic();
   }
@@ -712,14 +719,17 @@ void processCommand(const String& cmd) {
 
   g_lastCommand = act + ":" + valStr;
   
-  // Activar override manual por 10 minutos
-  g_manualOverrideUntil = millis() + MANUAL_OVERRIDE_MS;
-  g_mode = MODE_MANUAL;
+  if (act != "MODE") {
+    // Activar override manual temporal por 10 minutos para comandos de actuadores
+    g_manualOverrideUntil = millis() + MANUAL_OVERRIDE_MS;
+    g_mode = MODE_MANUAL;
+  }
 
   if (act == "BOMBA") {
     bool on = (valStr == "1");
     activatePump(on, false);
     sendACK("BOMBA");
+    transmitTelemetry();
 
   } else if (act == "S1") {
     // Restringir al rango calibrado
@@ -727,26 +737,31 @@ void processCommand(const String& cmd) {
     setServoAngle(CHANNEL_SERVO_A, angle);
     g_actuators.servo1Pos = angle;
     sendACK("S1");
+    transmitTelemetry();
 
   } else if (act == "S2") {
     int angle = constrain(valStr.toInt(), g_config.servo2Min, g_config.servo2Max);
     setServoAngle(CHANNEL_SERVO_B, angle);
     g_actuators.servo2Pos = angle;
     sendACK("S2");
+    transmitTelemetry();
 
   } else if (act == "MODE") {
     if (valStr == "AUTO") {
       g_mode = MODE_AUTO;
       g_manualOverrideUntil = 0;
       Serial.println(F("[CMD] Modo cambiado a AUTO"));
+      runControlLogic();
     } else if (valStr == "MANUAL") {
       g_mode = MODE_MANUAL;
+      g_manualOverrideUntil = 0;
       Serial.println(F("[CMD] Modo cambiado a MANUAL"));
     } else if (valStr == "SLEEP") {
       g_mode = MODE_SLEEP;
       Serial.println(F("[CMD] Modo cambiado a SLEEP"));
     }
     sendACK("MODE");
+    transmitTelemetry();
 
   } else if (act == "CAL") {
     // Formato VAL: PARAMETRO:valor  (ej. S1MIN:5, SOILMAX:3900)
