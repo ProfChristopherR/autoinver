@@ -612,16 +612,21 @@ void managePumpTimeout(unsigned long now) {
 
   unsigned long elapsed = currentMs - g_actuators.pumpStartMs;
 
-  // Duración del pulso de riego fijado en config.h (1 segundo)
-  unsigned long dur = PUMP_PULSE_MS;
+  // Duración del pulso de riego (1.5s en manual, 1.0s en auto)
+  unsigned long dur = g_actuators.pumpAuto ? PUMP_PULSE_MS : PUMP_MANUAL_PULSE_MS;
 
   if (elapsed >= dur) {
     activatePump(false, g_actuators.pumpAuto);
     Serial.print(F("[PUMP] Pulso apagado ("));
     Serial.print(elapsed / 1000.0, 1);
-    Serial.print(F("s). Pausa de absorción ("));
-    Serial.print(PUMP_COOLDOWN_MS / 1000);
-    Serial.println(F("s)..."));
+    Serial.print(F("s). "));
+    if (g_actuators.pumpAuto) {
+      Serial.print(F("Pausa de absorción ("));
+      Serial.print(PUMP_COOLDOWN_MS / 1000);
+      Serial.println(F("s)..."));
+    } else {
+      Serial.println(F("Fin de pulso manual (1.5s)."));
+    }
   }
 }
 

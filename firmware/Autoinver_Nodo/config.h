@@ -76,8 +76,9 @@
 #define SYNC_TIMEOUT_MS 10000   // Timeout sync hora 10s
 
 // ── Control de Riego por Pulsos (Invernadero pequeño) ──
-#define PUMP_PULSE_MS    1000   // TIEMPO ENCENDIDA: 1 segundo de agua por pulso
-#define PUMP_COOLDOWN_MS 2000   // TIEMPO APAGADA:   2 segundos de pausa/absorción entre pulsos
+#define PUMP_PULSE_MS        1000   // TIEMPO ENCENDIDA (AUTO): 1 segundo de agua por pulso
+#define PUMP_MANUAL_PULSE_MS 1500   // TIEMPO ENCENDIDA (MANUAL): 1.5 segundos en modo manual
+#define PUMP_COOLDOWN_MS     2000   // TIEMPO APAGADA:   2 segundos de pausa/absorción entre pulsos
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PARÁMETROS DE CONTROL
