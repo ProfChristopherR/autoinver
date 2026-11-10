@@ -683,7 +683,7 @@
           <!-- Selector tipo de gráfico (pequeño en la esquina superior derecha) -->
           <div class="time-selector" id="chartTypeSelector">
             <button class="active" id="btnTypeLine" onclick="setChartType('line')" title="Gráfico de líneas continuas">📈 Líneas</button>
-            <button id="btnTypeMixed" onclick="setChartType('mixed')" title="Gráfico mixto interconectado: Barras de suelo con curvas de temperatura y humedad">📊 Mixto</button>
+            <button id="btnTypeBar" onclick="setChartType('bar')" title="Gráfico de barras agrupadas">📊 Barras</button>
           </div>
           <!-- Selector rango de tiempo (1h, 6h, 24h, 7d) -->
           <div class="time-selector" id="timeRangeSelector">
@@ -835,7 +835,7 @@
     let lastData = null;
     let lastDataAt = 0;        // timestamp del último dato recibido
     let timeRange = '1h';
-    let currentChartType = 'line'; // 'line' | 'mixed'
+    let currentChartType = 'line'; // 'line' | 'bar'
     let lastChartData = [];        // datos de sensores en memoria para refresco instantáneo al alternar gráfico
     let isConnected = false;
     let realtimeSubscription = null;
@@ -894,7 +894,7 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
-    // GRÁFICO PRINCIPAL (LÍNEAS Y MIXTO BARRAS + LÍNEAS INTERCONECTADAS)
+    // GRÁFICO PRINCIPAL (LÍNEAS Y BARRAS GRUESAS ESTILIZADAS)
     // ═══════════════════════════════════════════════════════════════════════════════
     function initChart() {
       const canvas = document.getElementById('mainChart');
@@ -909,69 +909,54 @@
       Chart.defaults.color = '#94a3b8';
       Chart.defaults.borderColor = 'rgba(255,255,255,0.06)';
 
-      // Configuración de Datasets según tipo seleccionado (Líneas puras vs Mixto)
+      // Configuración de Datasets según tipo seleccionado (Líneas puras vs Barras Gruesas)
       let datasets = [];
-      const isMixed = (currentChartType === 'mixed');
+      const isBar = (currentChartType === 'bar');
 
-      if (isMixed) {
-        // Gráfico Mixto: Barras de suelo interconectadas por línea de cúspide + Curvas de Temp y Humedad
+      if (isBar) {
+        // Gráfico de Barras: Barras sólidas, gruesas y estilizadas con bordes redondeados (sin agujas/palos)
         datasets = [
           {
-            type: 'line',
+            type: 'bar',
             label: 'Temperatura (°C)',
             data: [],
             borderColor: '#f59e0b',
-            backgroundColor: 'rgba(245,158,11,0.2)',
-            borderWidth: 2.5,
-            tension: 0.35,
-            fill: false,
-            pointRadius: (timeRange === '7d' ? 1.5 : 2.5),
-            pointHoverRadius: 6,
-            pointBackgroundColor: '#f59e0b',
-            order: 1
-          },
-          {
-            type: 'line',
-            label: 'Humedad (%)',
-            data: [],
-            borderColor: '#3b82f6',
-            backgroundColor: 'rgba(59,130,246,0.2)',
-            borderWidth: 2.5,
-            tension: 0.35,
-            fill: false,
-            pointRadius: (timeRange === '7d' ? 1.5 : 2.5),
-            pointHoverRadius: 6,
-            pointBackgroundColor: '#3b82f6',
-            order: 2
+            backgroundColor: 'rgba(245, 158, 11, 0.75)',
+            hoverBackgroundColor: '#f59e0b',
+            borderWidth: 1.5,
+            borderRadius: 6,
+            minBarLength: 5,
+            maxBarThickness: 28,
+            barPercentage: 0.85,
+            categoryPercentage: 0.85
           },
           {
             type: 'bar',
-            label: 'Barras Suelo (%)',
+            label: 'Humedad (%)',
             data: [],
-            borderColor: '#10b981',
-            backgroundColor: 'rgba(16,185,129,0.35)',
-            hoverBackgroundColor: 'rgba(16,185,129,0.65)',
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.75)',
+            hoverBackgroundColor: '#3b82f6',
             borderWidth: 1.5,
-            borderRadius: 4,
-            barPercentage: (timeRange === '7d' ? 0.9 : 0.65),
-            categoryPercentage: 0.85,
-            order: 4
+            borderRadius: 6,
+            minBarLength: 5,
+            maxBarThickness: 28,
+            barPercentage: 0.85,
+            categoryPercentage: 0.85
           },
           {
-            type: 'line',
-            label: 'Línea Interconectada Suelo (%)',
+            type: 'bar',
+            label: 'Suelo (%)',
             data: [],
             borderColor: '#10b981',
-            backgroundColor: 'transparent',
-            borderWidth: 2.5,
-            tension: 0.35,
-            fill: false,
-            pointRadius: (timeRange === '7d' ? 2 : 3.5),
-            pointHoverRadius: 7,
-            pointBackgroundColor: '#10b981',
-            pointBorderColor: '#ffffff',
-            pointBorderWidth: 1.5,
-            order: 3
+            backgroundColor: 'rgba(16, 185, 129, 0.75)',
+            hoverBackgroundColor: '#10b981',
+            borderWidth: 1.5,
+            borderRadius: 6,
+            minBarLength: 5,
+            maxBarThickness: 28,
+            barPercentage: 0.85,
+            categoryPercentage: 0.85
           }
         ];
       } else {
@@ -1031,7 +1016,7 @@
       }
 
       mainChart = new Chart(ctx, {
-        type: isMixed ? 'bar' : 'line',
+        type: isBar ? 'bar' : 'line',
         data: {
           labels: [],
           datasets: datasets
@@ -1058,6 +1043,7 @@
           scales: {
             x: {
               type: 'time',
+              offset: isBar,
               time: {
                 unit: timeUnit,
                 displayFormats: displayFormats
@@ -1074,24 +1060,24 @@
       });
     }
 
-    // Alternar entre Gráfico de Líneas y Gráfico Mixto (Barras + Líneas)
+    // Alternar entre Gráfico de Líneas y Gráfico de Barras Gruesas
     function setChartType(type) {
       if (currentChartType === type && mainChart) return;
       currentChartType = type;
 
       const btnLine = document.getElementById('btnTypeLine');
-      const btnMixed = document.getElementById('btnTypeMixed');
+      const btnBar = document.getElementById('btnTypeBar');
       const titleIcon = document.getElementById('chartIconTitle');
 
       if (btnLine) btnLine.classList.toggle('active', type === 'line');
-      if (btnMixed) btnMixed.classList.toggle('active', type === 'mixed');
-      if (titleIcon) titleIcon.textContent = type === 'mixed' ? '📊' : '📈';
+      if (btnBar) btnBar.classList.toggle('active', type === 'bar');
+      if (titleIcon) titleIcon.textContent = type === 'bar' ? '📊' : '📈';
 
       initChart();
       if (lastChartData && lastChartData.length > 0) {
         updateChart(lastChartData);
       }
-      showToast(type === 'mixed' ? '📊 Gráfico mixto activado (Barras + Líneas)' : '📈 Gráfico de líneas activado', 'info');
+      showToast(type === 'bar' ? '📊 Gráfico de barras gruesas activado' : '📈 Gráfico de líneas activado', 'info');
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -1250,15 +1236,31 @@
       }
     }
 
+    // Muestreo controlado para que las barras tengan grosor real y espaciado proporcional (sin parecer agujas/palos)
+    function sampleDataForBars(rawList, maxSlots = 18) {
+      if (!rawList || rawList.length <= maxSlots) return rawList;
+      const step = (rawList.length - 1) / (maxSlots - 1);
+      const res = [];
+      for (let i = 0; i < maxSlots; i++) {
+        const idx = Math.min(Math.round(i * step), rawList.length - 1);
+        res.push(rawList[idx]);
+      }
+      return res;
+    }
+
     function updateChart(data) {
       if (!data || data.length === 0) return;
       lastChartData = data;
       if (!mainChart) return;
 
-      const labels = data.map(d => new Date(d.created_at));
-      const temps = data.map(d => d.temp_c);
-      const hums = data.map(d => d.hum_pct);
-      const soils = data.map(d => d.soil_pct);
+      const isBar = (currentChartType === 'bar');
+      // En modo barras, se usa una densidad calibrada de 14-18 puntos para garantizar barras gruesas y legibles
+      const chartPoints = isBar ? sampleDataForBars(data, timeRange === '7d' ? 14 : 18) : data;
+
+      const labels = chartPoints.map(d => new Date(d.created_at));
+      const temps = chartPoints.map(d => d.temp_c);
+      const hums = chartPoints.map(d => d.hum_pct);
+      const soils = chartPoints.map(d => d.soil_pct);
 
       // Ajustar escala temporal según timeRange activo (1h, 6h, 24h, 7d)
       if (mainChart.options.scales && mainChart.options.scales.x && mainChart.options.scales.x.time) {
@@ -1278,8 +1280,6 @@
       if (mainChart.data.datasets[0]) mainChart.data.datasets[0].data = temps;
       if (mainChart.data.datasets[1]) mainChart.data.datasets[1].data = hums;
       if (mainChart.data.datasets[2]) mainChart.data.datasets[2].data = soils;
-      // En modo mixto, el dataset 3 es la línea interconectada que pasa por encima de las barras de suelo
-      if (mainChart.data.datasets[3]) mainChart.data.datasets[3].data = soils;
       mainChart.update('none');
     }
 
