@@ -914,7 +914,7 @@
       const isMixed = (currentChartType === 'mixed');
 
       if (isMixed) {
-        // Gráfico Mixto: Suelo en Barras interconectado con curvas de Temperatura y Humedad
+        // Gráfico Mixto: Barras de suelo interconectadas por línea de cúspide + Curvas de Temp y Humedad
         datasets = [
           {
             type: 'line',
@@ -946,15 +946,31 @@
           },
           {
             type: 'bar',
-            label: 'Suelo (%)',
+            label: 'Barras Suelo (%)',
             data: [],
             borderColor: '#10b981',
-            backgroundColor: 'rgba(16,185,129,0.38)',
-            hoverBackgroundColor: 'rgba(16,185,129,0.7)',
+            backgroundColor: 'rgba(16,185,129,0.35)',
+            hoverBackgroundColor: 'rgba(16,185,129,0.65)',
             borderWidth: 1.5,
             borderRadius: 4,
             barPercentage: (timeRange === '7d' ? 0.9 : 0.65),
             categoryPercentage: 0.85,
+            order: 4
+          },
+          {
+            type: 'line',
+            label: 'Línea Interconectada Suelo (%)',
+            data: [],
+            borderColor: '#10b981',
+            backgroundColor: 'transparent',
+            borderWidth: 2.5,
+            tension: 0.35,
+            fill: false,
+            pointRadius: (timeRange === '7d' ? 2 : 3.5),
+            pointHoverRadius: 7,
+            pointBackgroundColor: '#10b981',
+            pointBorderColor: '#ffffff',
+            pointBorderWidth: 1.5,
             order: 3
           }
         ];
@@ -1259,9 +1275,11 @@
       }
 
       mainChart.data.labels = labels;
-      mainChart.data.datasets[0].data = temps;
-      mainChart.data.datasets[1].data = hums;
-      mainChart.data.datasets[2].data = soils;
+      if (mainChart.data.datasets[0]) mainChart.data.datasets[0].data = temps;
+      if (mainChart.data.datasets[1]) mainChart.data.datasets[1].data = hums;
+      if (mainChart.data.datasets[2]) mainChart.data.datasets[2].data = soils;
+      // En modo mixto, el dataset 3 es la línea interconectada que pasa por encima de las barras de suelo
+      if (mainChart.data.datasets[3]) mainChart.data.datasets[3].data = soils;
       mainChart.update('none');
     }
 
