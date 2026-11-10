@@ -678,12 +678,20 @@
     <!-- Charts -->
     <div class="section">
       <div class="section-header">
-        <h3 class="section-title">📈 Historial de Sensores</h3>
-        <div class="time-selector">
-          <button class="active" onclick="setTimeRange('1h')">1h</button>
-          <button onclick="setTimeRange('6h')">6h</button>
-          <button onclick="setTimeRange('24h')">24h</button>
-          <button onclick="setTimeRange('7d')">7d</button>
+        <h3 class="section-title"><span id="chartIconTitle">📈</span> Historial de Sensores</h3>
+        <div class="section-actions" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <!-- Selector tipo de gráfico (pequeño en la esquina superior derecha) -->
+          <div class="time-selector" id="chartTypeSelector">
+            <button class="active" id="btnTypeLine" onclick="setChartType('line')" title="Gráfico de líneas continuas">📈 Líneas</button>
+            <button id="btnTypeMixed" onclick="setChartType('mixed')" title="Gráfico mixto interconectado: Barras de suelo con curvas de temperatura y humedad">📊 Mixto</button>
+          </div>
+          <!-- Selector rango de tiempo (1h, 6h, 24h, 7d) -->
+          <div class="time-selector" id="timeRangeSelector">
+            <button class="active" onclick="setTimeRange('1h')">1h</button>
+            <button onclick="setTimeRange('6h')">6h</button>
+            <button onclick="setTimeRange('24h')">24h</button>
+            <button onclick="setTimeRange('7d')">7d</button>
+          </div>
         </div>
       </div>
       <div class="chart-container">
@@ -827,6 +835,8 @@
     let lastData = null;
     let lastDataAt = 0;        // timestamp del último dato recibido
     let timeRange = '1h';
+    let currentChartType = 'line'; // 'line' | 'mixed'
+    let lastChartData = [];        // datos de sensores en memoria para refresco instantáneo al alternar gráfico
     let isConnected = false;
     let realtimeSubscription = null;
 
@@ -884,50 +894,131 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
-    // GRÁFICO PRINCIPAL
+    // GRÁFICO PRINCIPAL (LÍNEAS Y MIXTO BARRAS + LÍNEAS INTERCONECTADAS)
     // ═══════════════════════════════════════════════════════════════════════════════
     function initChart() {
-      const ctx = document.getElementById('mainChart').getContext('2d');
+      const canvas = document.getElementById('mainChart');
+      if (!canvas) return;
       
+      // Si ya existe instancia de Chart.js, destruirla limpiamente antes de recrear
+      if (mainChart) {
+        mainChart.destroy();
+      }
+
+      const ctx = canvas.getContext('2d');
       Chart.defaults.color = '#94a3b8';
       Chart.defaults.borderColor = 'rgba(255,255,255,0.06)';
-      
+
+      // Configuración de Datasets según tipo seleccionado (Líneas puras vs Mixto)
+      let datasets = [];
+      const isMixed = (currentChartType === 'mixed');
+
+      if (isMixed) {
+        // Gráfico Mixto: Suelo en Barras interconectado con curvas de Temperatura y Humedad
+        datasets = [
+          {
+            type: 'line',
+            label: 'Temperatura (°C)',
+            data: [],
+            borderColor: '#f59e0b',
+            backgroundColor: 'rgba(245,158,11,0.2)',
+            borderWidth: 2.5,
+            tension: 0.35,
+            fill: false,
+            pointRadius: (timeRange === '7d' ? 1.5 : 2.5),
+            pointHoverRadius: 6,
+            pointBackgroundColor: '#f59e0b',
+            order: 1
+          },
+          {
+            type: 'line',
+            label: 'Humedad (%)',
+            data: [],
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59,130,246,0.2)',
+            borderWidth: 2.5,
+            tension: 0.35,
+            fill: false,
+            pointRadius: (timeRange === '7d' ? 1.5 : 2.5),
+            pointHoverRadius: 6,
+            pointBackgroundColor: '#3b82f6',
+            order: 2
+          },
+          {
+            type: 'bar',
+            label: 'Suelo (%)',
+            data: [],
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16,185,129,0.38)',
+            hoverBackgroundColor: 'rgba(16,185,129,0.7)',
+            borderWidth: 1.5,
+            borderRadius: 4,
+            barPercentage: (timeRange === '7d' ? 0.9 : 0.65),
+            categoryPercentage: 0.85,
+            order: 3
+          }
+        ];
+      } else {
+        // Gráfico Estándar de Líneas
+        datasets = [
+          {
+            type: 'line',
+            label: 'Temperatura (°C)',
+            data: [],
+            borderColor: '#f59e0b',
+            backgroundColor: 'rgba(245,158,11,0.1)',
+            borderWidth: 2,
+            tension: 0.4,
+            fill: true,
+            pointRadius: 0,
+            pointHoverRadius: 6,
+            order: 1
+          },
+          {
+            type: 'line',
+            label: 'Humedad (%)',
+            data: [],
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59,130,246,0.1)',
+            borderWidth: 2,
+            tension: 0.4,
+            fill: true,
+            pointRadius: 0,
+            pointHoverRadius: 6,
+            order: 2
+          },
+          {
+            type: 'line',
+            label: 'Suelo (%)',
+            data: [],
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16,185,129,0.1)',
+            borderWidth: 2,
+            tension: 0.4,
+            fill: true,
+            pointRadius: 0,
+            pointHoverRadius: 6,
+            order: 3
+          }
+        ];
+      }
+
+      // Escala temporal adaptativa según rango (1h, 6h, 24h, 7d)
+      let timeUnit = 'minute';
+      let displayFormats = { minute: 'HH:mm', hour: 'HH:mm' };
+      if (timeRange === '6h' || timeRange === '24h') {
+        timeUnit = 'hour';
+        displayFormats = { hour: 'HH:mm', day: 'dd/MM' };
+      } else if (timeRange === '7d') {
+        timeUnit = 'day';
+        displayFormats = { day: 'dd/MM', hour: 'HH:mm' };
+      }
+
       mainChart = new Chart(ctx, {
-        type: 'line',
+        type: isMixed ? 'bar' : 'line',
         data: {
           labels: [],
-          datasets: [
-            {
-              label: 'Temperatura (°C)',
-              data: [],
-              borderColor: '#f59e0b',
-              backgroundColor: 'rgba(245,158,11,0.1)',
-              tension: 0.4,
-              fill: true,
-              pointRadius: 0,
-              pointHoverRadius: 6
-            },
-            {
-              label: 'Humedad (%)',
-              data: [],
-              borderColor: '#3b82f6',
-              backgroundColor: 'rgba(59,130,246,0.1)',
-              tension: 0.4,
-              fill: true,
-              pointRadius: 0,
-              pointHoverRadius: 6
-            },
-            {
-              label: 'Suelo (%)',
-              data: [],
-              borderColor: '#10b981',
-              backgroundColor: 'rgba(16,185,129,0.1)',
-              tension: 0.4,
-              fill: true,
-              pointRadius: 0,
-              pointHoverRadius: 6
-            }
-          ]
+          datasets: datasets
         },
         options: {
           responsive: true,
@@ -936,7 +1027,7 @@
           plugins: {
             legend: {
               position: 'top',
-              labels: { usePointStyle: true, padding: 20 }
+              labels: { usePointStyle: true, padding: 18 }
             },
             tooltip: {
               backgroundColor: 'rgba(15, 23, 42, 0.95)',
@@ -952,8 +1043,8 @@
             x: {
               type: 'time',
               time: {
-                unit: 'minute',
-                displayFormats: { minute: 'HH:mm', hour: 'HH:mm' }
+                unit: timeUnit,
+                displayFormats: displayFormats
               },
               grid: { display: false }
             },
@@ -965,6 +1056,26 @@
           }
         }
       });
+    }
+
+    // Alternar entre Gráfico de Líneas y Gráfico Mixto (Barras + Líneas)
+    function setChartType(type) {
+      if (currentChartType === type && mainChart) return;
+      currentChartType = type;
+
+      const btnLine = document.getElementById('btnTypeLine');
+      const btnMixed = document.getElementById('btnTypeMixed');
+      const titleIcon = document.getElementById('chartIconTitle');
+
+      if (btnLine) btnLine.classList.toggle('active', type === 'line');
+      if (btnMixed) btnMixed.classList.toggle('active', type === 'mixed');
+      if (titleIcon) titleIcon.textContent = type === 'mixed' ? '📊' : '📈';
+
+      initChart();
+      if (lastChartData && lastChartData.length > 0) {
+        updateChart(lastChartData);
+      }
+      showToast(type === 'mixed' ? '📊 Gráfico mixto activado (Barras + Líneas)' : '📈 Gráfico de líneas activado', 'info');
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -1124,12 +1235,28 @@
     }
 
     function updateChart(data) {
-      if (!mainChart || !data || data.length === 0) return;
+      if (!data || data.length === 0) return;
+      lastChartData = data;
+      if (!mainChart) return;
 
       const labels = data.map(d => new Date(d.created_at));
       const temps = data.map(d => d.temp_c);
       const hums = data.map(d => d.hum_pct);
       const soils = data.map(d => d.soil_pct);
+
+      // Ajustar escala temporal según timeRange activo (1h, 6h, 24h, 7d)
+      if (mainChart.options.scales && mainChart.options.scales.x && mainChart.options.scales.x.time) {
+        if (timeRange === '1h') {
+          mainChart.options.scales.x.time.unit = 'minute';
+          mainChart.options.scales.x.time.displayFormats = { minute: 'HH:mm', hour: 'HH:mm' };
+        } else if (timeRange === '6h' || timeRange === '24h') {
+          mainChart.options.scales.x.time.unit = 'hour';
+          mainChart.options.scales.x.time.displayFormats = { hour: 'HH:mm', day: 'dd/MM' };
+        } else if (timeRange === '7d') {
+          mainChart.options.scales.x.time.unit = 'day';
+          mainChart.options.scales.x.time.displayFormats = { day: 'dd/MM', hour: 'HH:mm' };
+        }
+      }
 
       mainChart.data.labels = labels;
       mainChart.data.datasets[0].data = temps;
@@ -1435,9 +1562,12 @@
 
     function setTimeRange(range) {
       timeRange = range;
-      document.querySelectorAll('.time-selector button').forEach(btn => {
-        btn.classList.toggle('active', btn.textContent === range.replace('h','h').replace('d','d'));
-      });
+      const selector = document.getElementById('timeRangeSelector');
+      if (selector) {
+        selector.querySelectorAll('button').forEach(btn => {
+          btn.classList.toggle('active', btn.textContent.trim() === range);
+        });
+      }
       refreshData();
     }
 
