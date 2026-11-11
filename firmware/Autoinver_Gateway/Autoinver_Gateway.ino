@@ -785,12 +785,16 @@ void enviarComandoLoRa(const String& act, const String& val) {
   String ts = getTimestampStr();
   String cmd = "CMD:AUTOINVER|ACT:" + act + "|VAL:" + val + "|TS:" + ts;
   
-  LoRa.beginPacket();
-  LoRa.print(cmd);
-  LoRa.endPacket();
+  // Enviar 2 veces con breve pausa para evitar pérdida si el nodo está leyendo DHT22 o transmitiendo
+  for (int i = 0; i < 2; i++) {
+    LoRa.beginPacket();
+    LoRa.print(cmd);
+    LoRa.endPacket();
+    if (i == 0) delay(150);
+  }
   
   g_totalTxCommands++;
-  Serial.print(F("[TX-CMD] "));
+  Serial.print(F("[TX-CMD x2] "));
   Serial.println(cmd);
 }
 
@@ -1164,9 +1168,10 @@ void pollComandosPendientes() {
       g_node.mode = valueUpper;
     }
 
-    // Marcar como ACK en Supabase
+    // Marcar como ACK en Supabase y esperar brevemente antes del siguiente comando LoRa
     ackComando(id);
     comandoEjecutado = true;
+    delay(200);
   }
 
   // Sincronizar inmediatamente la telemetría con Supabase tras ejecutar comandos

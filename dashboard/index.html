@@ -746,6 +746,9 @@
               <button class="btn btn-primary" id="btnPumpOn" onclick="triggerManualPump('1')">Encender (1.5s)</button>
               <button class="btn btn-danger" id="btnPumpOff" onclick="triggerManualPump('0')">Apagar</button>
             </div>
+            <div id="pumpWaterWarning" style="display:none; margin-top:10px; padding:6px 10px; border-radius:6px; background:rgba(239,68,68,0.14); border:1px solid rgba(239,68,68,0.3); color:#fca5a5; font-size:0.74rem;">
+              🚨 Nivel de agua &lt; 10%: el nodo bloquea el encendido para proteger la bomba.
+            </div>
             <div style="margin-top:12px; font-size:0.75rem; color:var(--text-muted);">
               En manual emite un pulso controlado de riego de 1.5 segundos.
             </div>
@@ -764,6 +767,11 @@
                      onchange="onSliderChange('S1', this.value)">
               <div class="slider-value" id="valS1">0°</div>
             </div>
+            <div class="control-row" style="margin-top:10px; justify-content:space-between;">
+              <button type="button" class="btn" style="padding:5px 10px; font-size:0.75rem; flex:1; justify-content:center;" onclick="setServoPreset('S1', 0)">0° Cerrar</button>
+              <button type="button" class="btn" style="padding:5px 10px; font-size:0.75rem; flex:1; justify-content:center;" onclick="setServoPreset('S1', 45)">45°</button>
+              <button type="button" class="btn" style="padding:5px 10px; font-size:0.75rem; flex:1; justify-content:center;" onclick="setServoPreset('S1', 90)">90° Abrir</button>
+            </div>
           </div>
           <div class="control-group">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
@@ -778,6 +786,11 @@
                      oninput="onSliderInput('S2', this.value)" 
                      onchange="onSliderChange('S2', this.value)">
               <div class="slider-value" id="valS2">0°</div>
+            </div>
+            <div class="control-row" style="margin-top:10px; justify-content:space-between;">
+              <button type="button" class="btn" style="padding:5px 10px; font-size:0.75rem; flex:1; justify-content:center;" onclick="setServoPreset('S2', 0)">0° Cerrar</button>
+              <button type="button" class="btn" style="padding:5px 10px; font-size:0.75rem; flex:1; justify-content:center;" onclick="setServoPreset('S2', 45)">45°</button>
+              <button type="button" class="btn" style="padding:5px 10px; font-size:0.75rem; flex:1; justify-content:center;" onclick="setServoPreset('S2', 90)">90° Abrir</button>
             </div>
           </div>
         </div>
@@ -914,49 +927,52 @@
       const isBar = (currentChartType === 'bar');
 
       if (isBar) {
-        // Gráfico de Barras: Barras sólidas, gruesas y estilizadas con bordes redondeados (sin agujas/palos)
+        // Gráfico de Barras sobre eje categórico: barras sólidas, gruesas y visibles (nunca líneas de 1px)
         datasets = [
           {
             type: 'bar',
             label: 'Temperatura (°C)',
             data: [],
             borderColor: '#f59e0b',
-            backgroundColor: 'rgba(245, 158, 11, 0.75)',
-            hoverBackgroundColor: '#f59e0b',
+            backgroundColor: 'rgba(245, 158, 11, 0.85)',
+            hoverBackgroundColor: '#fbbf24',
             borderWidth: 1.5,
             borderRadius: 6,
-            minBarLength: 5,
-            maxBarThickness: 28,
+            borderSkipped: false,
+            minBarLength: 6,
+            maxBarThickness: 36,
             barPercentage: 0.85,
-            categoryPercentage: 0.85
+            categoryPercentage: 0.78
           },
           {
             type: 'bar',
             label: 'Humedad (%)',
             data: [],
             borderColor: '#3b82f6',
-            backgroundColor: 'rgba(59, 130, 246, 0.75)',
-            hoverBackgroundColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.85)',
+            hoverBackgroundColor: '#60a5fa',
             borderWidth: 1.5,
             borderRadius: 6,
-            minBarLength: 5,
-            maxBarThickness: 28,
+            borderSkipped: false,
+            minBarLength: 6,
+            maxBarThickness: 36,
             barPercentage: 0.85,
-            categoryPercentage: 0.85
+            categoryPercentage: 0.78
           },
           {
             type: 'bar',
             label: 'Suelo (%)',
             data: [],
             borderColor: '#10b981',
-            backgroundColor: 'rgba(16, 185, 129, 0.75)',
-            hoverBackgroundColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.85)',
+            hoverBackgroundColor: '#34d399',
             borderWidth: 1.5,
             borderRadius: 6,
-            minBarLength: 5,
-            maxBarThickness: 28,
+            borderSkipped: false,
+            minBarLength: 6,
+            maxBarThickness: 36,
             barPercentage: 0.85,
-            categoryPercentage: 0.85
+            categoryPercentage: 0.78
           }
         ];
       } else {
@@ -1041,9 +1057,12 @@
             }
           },
           scales: {
-            x: {
+            x: isBar ? {
+              type: 'category',
+              grid: { display: false },
+              ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }
+            } : {
               type: 'time',
-              offset: isBar,
               time: {
                 unit: timeUnit,
                 displayFormats: displayFormats
@@ -1104,15 +1123,18 @@
       try {
         const since = getTimeRangeDate();
         
-        const { data, error } = await supaClient
+        const { data: rawData, error } = await supaClient
           .from('autoinver_data')
           .select('*')
           .gte('created_at', since.toISOString())
-          .order('created_at', { ascending: true });
+          .order('created_at', { ascending: false })
+          .limit(2000);
 
         if (error) throw error;
 
-        if (data && data.length > 0) {
+        const data = rawData ? rawData.slice().reverse() : [];
+
+        if (data.length > 0) {
           const latest = data[data.length - 1];
           lastDataAt = new Date(latest.created_at).getTime();
           updateDashboard(latest);
@@ -1167,6 +1189,7 @@
     // ACTUALIZAR UI
     // ═══════════════════════════════════════════════════════════════════════════════
     function updateDashboard(data) {
+      const prevTemp = (lastData && lastData.temp_c !== undefined && lastData.temp_c !== null) ? lastData.temp_c : null;
       lastData = data;
 
       // Temperatura
@@ -1174,8 +1197,8 @@
         document.getElementById('valTemp').innerHTML = data.temp_c.toFixed(1) + '<span class="unit">°C</span>';
         document.getElementById('metaTemp').textContent = data.temp_c > 30 ? '🔥 Alta' : data.temp_c < 15 ? '❄️ Baja' : '✅ Normal';
         const trendEl = document.getElementById('trendTemp');
-        if (lastData && lastData.temp_c !== undefined) {
-          const diff = data.temp_c - lastData.temp_c;
+        if (prevTemp !== null) {
+          const diff = data.temp_c - prevTemp;
           trendEl.textContent = diff > 0 ? '▲ +' + diff.toFixed(1) : diff < 0 ? '▼ ' + diff.toFixed(1) : '●';
           trendEl.className = 'trend ' + (diff > 0 ? 'trend-up' : diff < 0 ? 'trend-down' : '');
         }
@@ -1194,9 +1217,13 @@
       }
 
       // Agua
-      if (data.water_pct !== null) {
+      if (data.water_pct !== null && data.water_pct !== undefined) {
         document.getElementById('valWater').innerHTML = data.water_pct.toFixed(0) + '<span class="unit">%</span>';
         document.getElementById('metaWater').textContent = data.water_pct < 20 ? '⚠️ Tanque bajo' : '✅ Nivel OK';
+        const pumpWarn = document.getElementById('pumpWaterWarning');
+        if (pumpWarn) {
+          pumpWarn.style.display = (data.water_pct < 10) ? 'block' : 'none';
+        }
       }
 
       // Bomba
@@ -1248,22 +1275,34 @@
       return res;
     }
 
+    function formatBarLabel(dateStr) {
+      const dt = new Date(dateStr);
+      if (timeRange === '7d') {
+        const d = dt.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' });
+        const t = dt.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+        return `${d} ${t}`;
+      }
+      return dt.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+    }
+
     function updateChart(data) {
       if (!data || data.length === 0) return;
       lastChartData = data;
       if (!mainChart) return;
 
       const isBar = (currentChartType === 'bar');
-      // En modo barras, se usa una densidad calibrada de 14-18 puntos para garantizar barras gruesas y legibles
-      const chartPoints = isBar ? sampleDataForBars(data, timeRange === '7d' ? 14 : 18) : data;
+      // En modo barras, se usa una densidad calibrada de 10-12 grupos en eje categórico para barras bien gruesas
+      const chartPoints = isBar ? sampleDataForBars(data, timeRange === '7d' ? 10 : 12) : data;
 
-      const labels = chartPoints.map(d => new Date(d.created_at));
+      const labels = isBar
+        ? chartPoints.map(d => formatBarLabel(d.created_at))
+        : chartPoints.map(d => new Date(d.created_at));
       const temps = chartPoints.map(d => d.temp_c);
       const hums = chartPoints.map(d => d.hum_pct);
       const soils = chartPoints.map(d => d.soil_pct);
 
-      // Ajustar escala temporal según timeRange activo (1h, 6h, 24h, 7d)
-      if (mainChart.options.scales && mainChart.options.scales.x && mainChart.options.scales.x.time) {
+      // Ajustar escala temporal solo cuando está en modo líneas
+      if (!isBar && mainChart.options.scales && mainChart.options.scales.x && mainChart.options.scales.x.time) {
         if (timeRange === '1h') {
           mainChart.options.scales.x.time.unit = 'minute';
           mainChart.options.scales.x.time.displayFormats = { minute: 'HH:mm', hour: 'HH:mm' };
@@ -1496,6 +1535,18 @@
       // Ajustar manualmente una compuerta pasa de inmediato a modo MANUAL
       setModeUI('MANUAL');
       sendCommand(id, val);
+    }
+
+    function setServoPreset(id, angle) {
+      isDragging[id] = false;
+      userInteracting[id] = Date.now();
+      userInteracting.MODE = Date.now();
+      const slider = document.getElementById('slider' + id);
+      if (slider) slider.value = angle;
+      const valEl = document.getElementById('val' + id);
+      if (valEl) valEl.textContent = angle + '°';
+      setModeUI('MANUAL');
+      sendCommand(id, angle);
     }
 
     function triggerManualPump(state) {

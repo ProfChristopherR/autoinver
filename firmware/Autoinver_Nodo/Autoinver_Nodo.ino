@@ -161,7 +161,8 @@ void showErrorScreen(const char* msg);
 
 // Utilidades
 String getTimestampStr();
-void setServoAngle(uint8_t channel, uint16_t angle);
+void setServoAngle(uint8_t channel, int angle);
+void releaseServos();
 void handleWatchdog();
 void enterSleepMode();
 void logMessage(const char* level, const char* msg);
@@ -399,6 +400,14 @@ void loadCalibration() {
   if (g_config.sharpMaxADC <= g_config.sharpMinADC || g_config.sharpMaxADC == 3500) {
     g_config.sharpMinADC = 800;
     g_config.sharpMaxADC = 2500;
+  }
+  if (g_config.servo1Max <= g_config.servo1Min || g_config.servo1Min < 0 || g_config.servo1Max > 180) {
+    g_config.servo1Min = 0;
+    g_config.servo1Max = 90;
+  }
+  if (g_config.servo2Max <= g_config.servo2Min || g_config.servo2Min < 0 || g_config.servo2Max > 180) {
+    g_config.servo2Min = 0;
+    g_config.servo2Max = 90;
   }
   if (g_config.pumpDuration < 500) {
     g_config.pumpDuration = 1000;
@@ -648,6 +657,13 @@ void setServoAngle(uint8_t channel, int angle) {
   Serial.println(F("°"));
 }
 
+void releaseServos() {
+  if (!g_pcaOk) return;
+  pca.setPWM(CHANNEL_SERVO_A, 0, 0);
+  pca.setPWM(CHANNEL_SERVO_B, 0, 0);
+  Serial.println(F("[SERVO] PWM liberado en ambos canales (sin torque/zumbido)"));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // IMPLEMENTACIÓN: COMUNICACIÓN LORA
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -737,8 +753,13 @@ void processCommand(const String& cmd) {
 
   if (act == "BOMBA") {
     bool on = (valStr == "1");
-    activatePump(on, false);
-    sendACK("BOMBA");
+    if (on && g_sensors.waterPct < WATER_MIN_PCT) {
+      Serial.println(F("[CMD] BOMBA bloqueada por nivel de agua < 10%"));
+      sendACK("BOMBA_LOW_W");
+    } else {
+      activatePump(on, false);
+      sendACK("BOMBA");
+    }
     transmitTelemetry();
 
   } else if (act == "S1") {
@@ -862,6 +883,8 @@ void printHelpMenu() {
   Serial.println(F("║  'auto'             -> Activa modo autónomo (riego automático)   ║"));
   Serial.println(F("║  'manual'           -> Activa modo manual (riego pausado)        ║"));
   Serial.println(F("║  'bomba on'/'off'   -> Prueba encendido manual de la bomba       ║"));
+  Serial.println(F("║  'bomba test'       -> Prueba relé 1.5s ignorando sensor agua    ║"));
+  Serial.println(F("║  'relax'            -> Libera PWM de servos (detiene pitido)     ║"));
   Serial.println(F("║  'abrir' / 'cerrar' -> Prueba compuertas abiertas / cerradas     ║"));
   Serial.println(F("║  's1 90' / 's2 0'   -> Mueve un servo a cualquier ángulo (0-180) ║"));
   Serial.println(F("║  'status'           -> Muestra los valores ADC y calibración     ║"));
@@ -920,6 +943,16 @@ void handleSerialConsole() {
     activatePump(false, false);
     Serial.println(F("🖐️ [MODO] Cambiado a MANUAL (Riego automático pausado)"));
     printCalibrationStatus();
+
+  } else if (cmd == "bomba test") {
+    Serial.println(F("⚡ [TEST] Activando relé bomba directamente por 1.5s (sin filtro agua)..."));
+    digitalWrite(PIN_RELE, HIGH);
+    delay(1500);
+    digitalWrite(PIN_RELE, LOW);
+    Serial.println(F("⚡ [TEST] Relé bomba apagado."));
+
+  } else if (cmd == "relax" || cmd == "servos off") {
+    releaseServos();
 
   } else if (cmd == "bomba on" || cmd == "pump on" || cmd == "regar") {
     activatePump(true, false);
