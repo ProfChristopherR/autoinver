@@ -24,7 +24,8 @@
 #define PIN_DHT 25     // DHT22 - Temperatura/Humedad
 #define DHT_TYPE DHT22 //
 #define PIN_SOIL 33    // Humedad suelo capacitivo (ADC)
-#define PIN_SHARP 32   // Sharp 2Y0A21 - Nivel agua (ADC)
+#define PIN_HCSR04_TRIG 32 // HC-SR04 Trigger (salida digital)
+#define PIN_HCSR04_ECHO 13 // HC-SR04 Echo (entrada 3.3V: usar divisor resistivo desde 5V)
 
 // --- Actuadores ---
 #define PIN_RELE 12       // Relé bomba 12V
@@ -90,6 +91,11 @@
 #define MANUAL_OVERRIDE_MS 600000 // 10 minutos de override manual
 #define MAX_SYNC_ATTEMPTS 5       // Intentos máximos de sync hora
 
+// ── Sensor Ultrasónico HC-SR04 (Nivel de Agua) ──
+#define HCSR04_FULL_CM_DEFAULT  3.0f    // <= 3.0 cm -> 100% (tanque lleno)
+#define HCSR04_EMPTY_CM_DEFAULT 10.0f   // >= 10.0 cm -> 0% (tanque vacío)
+#define HCSR04_TIMEOUT_US       12000UL // Timeout eco ~2m (evita bloquear LoRa)
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SERVOS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -108,8 +114,8 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 struct ConfigData {
-  int sharpMinADC = 800;     // ADC con tanque vacío (distancia lejana = voltaje bajo)
-  int sharpMaxADC = 2500;    // ADC con tanque lleno (distancia cercana = voltaje alto)
+  float waterFullCm  = HCSR04_FULL_CM_DEFAULT;  // cm con tanque lleno (<= 3 cm = 100%)
+  float waterEmptyCm = HCSR04_EMPTY_CM_DEFAULT; // cm con tanque vacío (>= 10 cm = 0%)
   int soilMinADC  = 1400;    // ADC suelo mojado (en agua = capacitancia alta, voltaje bajo)
   int soilMaxADC  = 3200;    // ADC suelo seco (en aire = capacitancia baja, voltaje alto)
   int servo1Min   = 0;       // Grados mínimos compuerta A (calibración)

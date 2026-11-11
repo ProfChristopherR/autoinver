@@ -3,7 +3,7 @@
  * ║                    AUTOINVER NODO v2.0 - FIRMWARE                         ║
  * ║         Sistema Autónomo de Invernadero Móvil con LoRa 915MHz             ║
  * ║                                                                           ║
- * ║  Hardware: Heltec LoRa32 V2 + DHT22 + HumSuelo + Sharp IR + PCA9685       ║
+ * ║  Hardware: Heltec LoRa32 V2 + DHT22 + HumSuelo + HC-SR04 + PCA9685        ║
  * ║  Autor: Agente Implementador | Licencia: MIT                              ║
  * ╚═══════════════════════════════════════════════════════════════════════════╝
  */
@@ -59,8 +59,9 @@ struct SensorData {
   float humidity    = -999.0f;
   float soilPct     = 0.0f;
   float waterPct    = 0.0f;
+  float waterDistCm = -1.0f;
   int   soilADC     = 0;
-  int   waterADC    = 0;
+  int   waterADC    = 0;  // Distancia en mm (para compatibilidad telemetría/BD)
   bool  valid       = false;
 };
 
@@ -104,12 +105,12 @@ unsigned long g_lastPumpStopMs    = 0;
 String        g_lastCommand     = "NINGUNO";
 int           g_syncAttempts    = 0;
 
-// Buffer suavizado para ADC (filtro media móvil)
+// Buffer suavizado para ADC suelo + contador de fallos HC-SR04
 static const int ADC_SAMPLES = 8;
 int g_soilSamples[ADC_SAMPLES]  = {0};
-int g_waterSamples[ADC_SAMPLES] = {0};
 int g_sampleIndex = 0;
 bool g_sampleBufFull = false;
+int g_waterFailCount = 0;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DECLARACIONES DE FUNCIONES
@@ -133,8 +134,9 @@ void printHelpMenu();
 // Sensores
 void readAllSensors();
 float smoothADC(int* buf, int len);
+float readUltrasonicDistanceCm();
 float adcToSoilPercent(int adc);
-float adcToWaterPercent(int adc);
+float distanceToWaterPercent(float distCm);
 bool  checkSensorsHealthy();
 
 // Lógica de control autónomo
@@ -307,17 +309,18 @@ void initLoRa() {
 void initSensors() {
   dht.begin();
   pinMode(PIN_SOIL, INPUT);
-  pinMode(PIN_SHARP, INPUT);
-  
-  // Inicializar buffers de suavizado
+  pinMode(PIN_HCSR04_TRIG, OUTPUT);
+  digitalWrite(PIN_HCSR04_TRIG, LOW);
+  pinMode(PIN_HCSR04_ECHO, INPUT_PULLDOWN);
+
+  // Inicializar buffer de suavizado de suelo
   for (int i = 0; i < ADC_SAMPLES; i++) {
     g_soilSamples[i] = analogRead(PIN_SOIL);
-    g_waterSamples[i] = analogRead(PIN_SHARP);
     delay(5);
   }
   g_sampleBufFull = true;
-  
-  Serial.println(F("[OK] Sensores iniciados"));
+
+  Serial.println(F("[OK] Sensores iniciados (DHT22 + Suelo + HC-SR04)"));
 }
 
 void initActuators() {
@@ -379,8 +382,8 @@ void initRTC() {
 
 void loadCalibration() {
   // Cargar calibración desde NVS, o usar defaults seguros
-  g_config.sharpMinADC  = prefs.getInt("sharp_min", 800);
-  g_config.sharpMaxADC  = prefs.getInt("sharp_max", 2500);
+  g_config.waterFullCm  = prefs.getFloat("w_full_cm", HCSR04_FULL_CM_DEFAULT);
+  g_config.waterEmptyCm = prefs.getFloat("w_empty_cm", HCSR04_EMPTY_CM_DEFAULT);
   g_config.soilMinADC   = prefs.getInt("soil_min", 1400);
   g_config.soilMaxADC   = prefs.getInt("soil_max", 3200);
   g_config.servo1Min    = prefs.getInt("s1_min", 0);
@@ -392,14 +395,16 @@ void loadCalibration() {
   g_config.soilThresh   = prefs.getFloat("soil_thr", 40.0f);
   g_config.pumpDuration = prefs.getInt("pump_dur", 1000);
 
-  // Sanitizar si NVS tenía guardados los valores antiguos incorrectos
+  // Sanitizar si NVS tenía guardados valores inválidos
   if (g_config.soilMaxADC <= g_config.soilMinADC || g_config.soilMaxADC == 4095) {
     g_config.soilMinADC = 1400;
     g_config.soilMaxADC = 3200;
   }
-  if (g_config.sharpMaxADC <= g_config.sharpMinADC || g_config.sharpMaxADC == 3500) {
-    g_config.sharpMinADC = 800;
-    g_config.sharpMaxADC = 2500;
+  if (isnan(g_config.waterFullCm) || isnan(g_config.waterEmptyCm) ||
+      g_config.waterEmptyCm <= g_config.waterFullCm ||
+      g_config.waterFullCm < 0.5f || g_config.waterEmptyCm > 400.0f) {
+    g_config.waterFullCm  = HCSR04_FULL_CM_DEFAULT;
+    g_config.waterEmptyCm = HCSR04_EMPTY_CM_DEFAULT;
   }
   if (g_config.servo1Max <= g_config.servo1Min || g_config.servo1Min < 0 || g_config.servo1Max > 180) {
     g_config.servo1Min = 0;
@@ -418,8 +423,8 @@ void loadCalibration() {
 }
 
 void saveCalibration() {
-  prefs.putInt("sharp_min", g_config.sharpMinADC);
-  prefs.putInt("sharp_max", g_config.sharpMaxADC);
+  prefs.putFloat("w_full_cm", g_config.waterFullCm);
+  prefs.putFloat("w_empty_cm", g_config.waterEmptyCm);
   prefs.putInt("soil_min", g_config.soilMinADC);
   prefs.putInt("soil_max", g_config.soilMaxADC);
   prefs.putInt("s1_min", g_config.servo1Min);
@@ -451,27 +456,79 @@ void readAllSensors() {
     Serial.println(F("[WARN] DHT22 lectura fallida"));
   }
 
-  // ── ADC con promedio rápido de 5 muestras (lectura inmediata sin lag de 20s) ──
+  // ── Suelo: promedio de 5 muestras analógicas ──
   long soilSum = 0;
-  long waterSum = 0;
   for (int i = 0; i < 5; i++) {
     soilSum += analogRead(PIN_SOIL);
-    waterSum += analogRead(PIN_SHARP);
     delay(4);
   }
-  g_sensors.soilADC  = (int)(soilSum / 5);
-  g_sensors.waterADC = (int)(waterSum / 5);
+  g_sensors.soilADC = (int)(soilSum / 5);
+  g_sensors.soilPct = adcToSoilPercent(g_sensors.soilADC);
 
-  // ── Conversión a porcentajes calibrados ──
-  g_sensors.soilPct  = adcToSoilPercent(g_sensors.soilADC);
-  g_sensors.waterPct = adcToWaterPercent(g_sensors.waterADC);
+  // ── Nivel de agua: Ultrasónico HC-SR04 con filtro de mediana ──
+  float distCm = readUltrasonicDistanceCm();
+  if (distCm >= 0.0f) {
+    g_waterFailCount      = 0;
+    g_sensors.waterDistCm = distCm;
+    g_sensors.waterADC    = (int)roundf(distCm * 10.0f);  // mm para telemetría/BD
+    g_sensors.waterPct    = distanceToWaterPercent(distCm);
+  } else {
+    g_waterFailCount++;
+    if (g_waterFailCount >= 3 || g_sensors.waterDistCm < 0.0f) {
+      g_sensors.waterDistCm = -1.0f;
+      g_sensors.waterADC    = 0;
+      g_sensors.waterPct    = 0.0f;  // Seguro: bloquea bomba si el sensor falla
+      Serial.println(F("[WARN] HC-SR04 sin eco válido (revisar Trig=32, Echo=13, VCC=5V)"));
+    }
+  }
 
   // Monitor serie en tiempo real
   Serial.print(F("[SENS] Suelo: ADC=")); Serial.print(g_sensors.soilADC);
   Serial.print(F(" (")); Serial.print(g_sensors.soilPct, 1);
-  Serial.print(F("%) | Agua: ADC=")); Serial.print(g_sensors.waterADC);
-  Serial.print(F(" (")); Serial.print(g_sensors.waterPct, 1);
-  Serial.println(F("%)"));
+  Serial.print(F("%) | Agua HC-SR04: "));
+  if (g_sensors.waterDistCm >= 0.0f) {
+    Serial.print(g_sensors.waterDistCm, 1);
+    Serial.print(F(" cm ("));
+    Serial.print(g_sensors.waterPct, 1);
+    Serial.println(F("%)"));
+  } else {
+    Serial.println(F("SIN ECO (0.0%)"));
+  }
+}
+
+float readUltrasonicDistanceCm() {
+  const int NUM_PINGS = 5;
+  float samples[NUM_PINGS];
+  int validCount = 0;
+
+  for (int i = 0; i < NUM_PINGS; i++) {
+    digitalWrite(PIN_HCSR04_TRIG, LOW);
+    delayMicroseconds(2);
+    digitalWrite(PIN_HCSR04_TRIG, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(PIN_HCSR04_TRIG, LOW);
+
+    unsigned long duration = pulseIn(PIN_HCSR04_ECHO, HIGH, HCSR04_TIMEOUT_US);
+    if (duration >= 60 && duration <= HCSR04_TIMEOUT_US) {
+      samples[validCount++] = (duration * 0.0343f) * 0.5f;
+    }
+    if (i < NUM_PINGS - 1) delay(12); // Esperar disipación de ecos antes del siguiente ping
+  }
+
+  if (validCount == 0) return -1.0f;
+
+  // Ordenamiento simple para obtener la mediana (descarta picos o rebotes falsos)
+  for (int i = 1; i < validCount; i++) {
+    float key = samples[i];
+    int j = i - 1;
+    while (j >= 0 && samples[j] > key) {
+      samples[j + 1] = samples[j];
+      j--;
+    }
+    samples[j + 1] = key;
+  }
+
+  return samples[validCount / 2];
 }
 
 float smoothADC(int* buf, int len) {
@@ -498,20 +555,22 @@ float adcToSoilPercent(int adc) {
   return constrain(pct, 0.0f, 100.0f);
 }
 
-float adcToWaterPercent(int adc) {
-  // Sensor Sharp IR:
-  // sharpMinADC = Vacío (nivel de agua bajo / distancia lejana al sensor) -> 0%
-  // sharpMaxADC = Lleno (nivel de agua alto / distancia cercana al sensor) -> 100%
-  int empty = g_config.sharpMinADC;
-  int full  = g_config.sharpMaxADC;
+float distanceToWaterPercent(float distCm) {
+  if (distCm < 0.0f) return 0.0f;
 
-  if (full <= empty) {
-    empty = 800;
-    full  = 2500;
+  // HC-SR04:
+  // waterFullCm  (<= 3.0 cm)  -> 100% (tanque lleno)
+  // waterEmptyCm (>= 10.0 cm) -> 0%   (tanque vacío)
+  float full  = g_config.waterFullCm;
+  float empty = g_config.waterEmptyCm;
+
+  if (empty <= full) {
+    full  = HCSR04_FULL_CM_DEFAULT;
+    empty = HCSR04_EMPTY_CM_DEFAULT;
   }
 
-  int val = constrain(adc, empty, full);
-  float pct = (float)(val - empty) * 100.0f / (float)(full - empty);
+  float clamped = constrain(distCm, full, empty);
+  float pct = (empty - clamped) * 100.0f / (empty - full);
   return constrain(pct, 0.0f, 100.0f);
 }
 
@@ -812,9 +871,11 @@ void processCommand(const String& cmd) {
       else if (param == "S2MAX")    g_config.servo2Max = valor;
       else if (param == "SOILMIN")  g_config.soilMinADC  = (valorStr == "NOW") ? g_sensors.soilADC  : valor;
       else if (param == "SOILMAX")  g_config.soilMaxADC  = (valorStr == "NOW") ? g_sensors.soilADC  : valor;
-      else if (param == "SHARPMIN") g_config.sharpMinADC = (valorStr == "NOW") ? g_sensors.waterADC : valor;
-      else if (param == "SHARPMAX") g_config.sharpMaxADC = (valorStr == "NOW") ? g_sensors.waterADC : valor;
-      else {
+      else if (param == "WATEREMPTY" || param == "SHARPMIN") {
+        g_config.waterEmptyCm = (valorStr == "NOW") ? (g_sensors.waterDistCm > 0 ? g_sensors.waterDistCm : g_config.waterEmptyCm) : valorStr.toFloat();
+      } else if (param == "WATERFULL" || param == "SHARPMAX") {
+        g_config.waterFullCm = (valorStr == "NOW") ? (g_sensors.waterDistCm > 0 ? g_sensors.waterDistCm : g_config.waterFullCm) : valorStr.toFloat();
+      } else {
         Serial.print(F("[CAL] Parámetro desconocido: "));
         Serial.println(param);
         sendACK("CAL_ERR");
@@ -825,7 +886,7 @@ void processCommand(const String& cmd) {
       Serial.print(F("[CAL] "));
       Serial.print(param);
       Serial.print(F(" = "));
-      Serial.println(valorStr == "NOW" ? String((param.startsWith("SOIL") ? g_sensors.soilADC : g_sensors.waterADC)) : String(valor));
+      Serial.println(valorStr == "NOW" ? (param.startsWith("SOIL") ? String(g_sensors.soilADC) : String(g_sensors.waterDistCm, 1)) : valorStr);
       sendACK("CAL");
     }
   } else if (act == "S1RAW") {
@@ -859,10 +920,15 @@ void printCalibrationStatus() {
   Serial.print(F("   [Calibración Suelo] SECO (0%): ")); Serial.print(g_config.soilMaxADC);
   Serial.print(F(" | MOJADO (100%): ")); Serial.println(g_config.soilMinADC);
 
-  Serial.print(F(" ADC Agua actual  : ")); Serial.print(g_sensors.waterADC);
+  Serial.print(F(" Agua HC-SR04     : "));
+  if (g_sensors.waterDistCm >= 0.0f) {
+    Serial.print(g_sensors.waterDistCm, 1); Serial.print(F(" cm"));
+  } else {
+    Serial.print(F("SIN ECO"));
+  }
   Serial.print(F(" -> Nivel calculado: ")); Serial.print(g_sensors.waterPct, 1); Serial.println(F("%"));
-  Serial.print(F("   [Calibración Agua]  VACÍO (0%): ")); Serial.print(g_config.sharpMinADC);
-  Serial.print(F(" | LLENO (100%): ")); Serial.println(g_config.sharpMaxADC);
+  Serial.print(F("   [Calibración Agua]  LLENO (100%): <= ")); Serial.print(g_config.waterFullCm, 1);
+  Serial.print(F(" cm | VACÍO (0%): >= ")); Serial.print(g_config.waterEmptyCm, 1); Serial.println(F(" cm"));
   
   Serial.print(F(" Temperatura: ")); Serial.print(g_sensors.temperature, 1);
   Serial.print(F(" °C | Humedad aire: ")); Serial.print(g_sensors.humidity, 1); Serial.println(F(" %"));
@@ -919,17 +985,25 @@ void handleSerialConsole() {
     printCalibrationStatus();
 
   } else if (cmd == "vacio" || cmd == "empty" || cmd == "cal water empty") {
-    g_config.sharpMinADC = g_sensors.waterADC;
-    saveCalibration();
-    Serial.print(F("✅ [CAL] Estanque VACÍO (0%) calibrado a ADC = "));
-    Serial.println(g_config.sharpMinADC);
+    if (g_sensors.waterDistCm > 0.0f) {
+      g_config.waterEmptyCm = g_sensors.waterDistCm;
+      saveCalibration();
+      Serial.print(F("✅ [CAL] Estanque VACÍO (0%) calibrado a "));
+      Serial.print(g_config.waterEmptyCm, 1); Serial.println(F(" cm"));
+    } else {
+      Serial.println(F("⚠️ No hay lectura válida del HC-SR04 para calibrar VACÍO."));
+    }
     printCalibrationStatus();
 
   } else if (cmd == "lleno" || cmd == "full" || cmd == "cal water full") {
-    g_config.sharpMaxADC = g_sensors.waterADC;
-    saveCalibration();
-    Serial.print(F("✅ [CAL] Estanque LLENO (100%) calibrado a ADC = "));
-    Serial.println(g_config.sharpMaxADC);
+    if (g_sensors.waterDistCm > 0.0f) {
+      g_config.waterFullCm = g_sensors.waterDistCm;
+      saveCalibration();
+      Serial.print(F("✅ [CAL] Estanque LLENO (100%) calibrado a "));
+      Serial.print(g_config.waterFullCm, 1); Serial.println(F(" cm"));
+    } else {
+      Serial.println(F("⚠️ No hay lectura válida del HC-SR04 para calibrar LLENO."));
+    }
     printCalibrationStatus();
 
   } else if (cmd == "auto") {
@@ -993,10 +1067,10 @@ void handleSerialConsole() {
     printHelpMenu();
 
   } else if (cmd == "reset") {
-    g_config.soilMinADC  = 1400;
-    g_config.soilMaxADC  = 3200;
-    g_config.sharpMinADC = 800;
-    g_config.sharpMaxADC = 2500;
+    g_config.soilMinADC   = 1400;
+    g_config.soilMaxADC   = 3200;
+    g_config.waterFullCm  = HCSR04_FULL_CM_DEFAULT;
+    g_config.waterEmptyCm = HCSR04_EMPTY_CM_DEFAULT;
     saveCalibration();
     Serial.println(F("🔄 [CAL] Calibración restablecida a valores seguros de fábrica."));
     printCalibrationStatus();
@@ -1004,11 +1078,13 @@ void handleSerialConsole() {
   } else if (cmd.indexOf(':') > 0) {
     int sep = cmd.indexOf(':');
     String k = cmd.substring(0, sep);
-    int val = cmd.substring(sep + 1).toInt();
-    if (k == "soil_dry")        { g_config.soilMaxADC  = val; saveCalibration(); Serial.println(F("✅ Suelo seco actualizado")); }
-    else if (k == "soil_wet")   { g_config.soilMinADC  = val; saveCalibration(); Serial.println(F("✅ Suelo mojado actualizado")); }
-    else if (k == "water_empty"){ g_config.sharpMinADC = val; saveCalibration(); Serial.println(F("✅ Agua vacía actualizada")); }
-    else if (k == "water_full") { g_config.sharpMaxADC = val; saveCalibration(); Serial.println(F("✅ Agua llena actualizada")); }
+    String valStrRaw = cmd.substring(sep + 1);
+    int val = valStrRaw.toInt();
+    float valF = valStrRaw.toFloat();
+    if (k == "soil_dry")        { g_config.soilMaxADC   = val;  saveCalibration(); Serial.println(F("✅ Suelo seco actualizado")); }
+    else if (k == "soil_wet")   { g_config.soilMinADC   = val;  saveCalibration(); Serial.println(F("✅ Suelo mojado actualizado")); }
+    else if (k == "water_empty"){ g_config.waterEmptyCm = valF; saveCalibration(); Serial.println(F("✅ Agua vacía (cm) actualizada")); }
+    else if (k == "water_full") { g_config.waterFullCm  = valF; saveCalibration(); Serial.println(F("✅ Agua llena (cm) actualizada")); }
     else if (k == "s1_closed")  { g_config.servo1Min   = val; saveCalibration(); Serial.println(F("✅ S1 Cerrada actualizado")); }
     else if (k == "s1_open")    { g_config.servo1Max   = val; saveCalibration(); Serial.println(F("✅ S1 Abierta actualizado")); }
     else if (k == "s2_closed")  { g_config.servo2Min   = val; saveCalibration(); Serial.println(F("✅ S2 Cerrada actualizado")); }
@@ -1111,7 +1187,7 @@ void showBootScreen() {
   display.setCursor(8, 38);
   display.print(F("DHT22 + HumSuelo"));
   display.setCursor(8, 48);
-  display.print(F("Sharp IR + PCA9685"));
+  display.print(F("HC-SR04 + PCA9685"));
   display.setCursor(8, 58);
   display.print(F("LoRa 915MHz"));
 
