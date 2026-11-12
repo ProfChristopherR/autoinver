@@ -23,7 +23,7 @@
 // OBJETOS GLOBALES
 // ═══════════════════════════════════════════════════════════════════════════════
 DHT dht(PIN_DHT, DHT_TYPE);
-Adafruit_SSD1306 display(SCREEN_W, SCREEN_H, &Wire, PIN_OLED_RST);
+Adafruit_SSD1306 display(SCREEN_W, SCREEN_H, &Wire, PIN_OLED_RST, 100000UL, 100000UL);
 ESP32Time rtc(GMT_OFFSET_SEC);
 // PCA9685 comparte el bus I2C del OLED (Wire, pines 4/15).
 // En Heltec LoRa32 V2 el GPIO21 controla Vext, no se puede usar como SDA.
@@ -171,6 +171,7 @@ void showErrorScreen(const char* msg);
 // Utilidades
 String getTimestampStr();
 void waitListeningLoRa(unsigned long ms);
+bool ensurePCA9685();
 void setServoAngle(uint8_t channel, int angle);
 void releaseServos();
 void handleWatchdog();
@@ -235,6 +236,8 @@ void loop() {
   if (g_mode == MODE_MANUAL && g_manualOverrideUntil > 0 && now >= g_manualOverrideUntil) {
     g_mode = MODE_AUTO;
     g_manualOverrideUntil = 0;
+    g_actuators.servo1Pos = -1;
+    g_actuators.servo2Pos = -1;
     Serial.println(F("[MODO] ⏰ Fin del override manual (10 min). Retornando automáticamente a modo AUTO."));
   }
 
@@ -289,6 +292,11 @@ void loop() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void initDisplay() {
+  // En Heltec WiFi LoRa 32 V2, GPIO21 controla Vext (LOW = encender 3.3V de periféricos y pull-ups I2C)
+  pinMode(21, OUTPUT);
+  digitalWrite(21, LOW);
+  delay(20);
+
   pinMode(PIN_OLED_RST, OUTPUT);
   digitalWrite(PIN_OLED_RST, LOW);
   delay(50);
@@ -296,6 +304,7 @@ void initDisplay() {
   delay(50);
 
   Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
+  Wire.setClock(100000);
   
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println(F("[ERR] OLED init failed"));
@@ -365,17 +374,17 @@ void initActuators() {
     Serial.println(F("[I2C] NINGUN dispositivo encontrado -> revisar cableado SDA/SCL/VCC"));
   }
 
-  if (!pca.begin()) {
-    Serial.println(F("[ERR] PCA9685 no detectado en I2C (bus pines 4/15). Servos deshabilitados."));
-    g_pcaOk = false;
+  if (!ensurePCA9685()) {
+    Serial.println(F("[ERR] PCA9685 no detectado en I2C (bus pines 4/15). Reintentará automáticamente."));
   } else {
-    // Clones del PCA9685 suelen tener oscilador de 27MHz (original: 25MHz).
-    // Si no se calibra, los pulsos salen ~8% más cortos y el servo no se mueve.
-    pca.setOscillatorFrequency(27000000);
-    pca.setPWMFreq(50);  // 50Hz para servos
-    g_pcaOk = true;
-
-    // Posición segura inicial: compuertas cerradas (0°)
+    // Barrido corto de verificación al arranque (0° -> 45° -> 0°) para confirmar movimiento físico
+    Serial.println(F("[SERVO] Prueba de arranque en canales 0 y 1 (0° -> 45° -> 0°)..."));
+    setServoAngle(CHANNEL_SERVO_A, g_config.servo1Min);
+    setServoAngle(CHANNEL_SERVO_B, g_config.servo2Min);
+    delay(400);
+    setServoAngle(CHANNEL_SERVO_A, 45);
+    setServoAngle(CHANNEL_SERVO_B, 45);
+    delay(500);
     setServoAngle(CHANNEL_SERVO_A, g_config.servo1Min);
     setServoAngle(CHANNEL_SERVO_B, g_config.servo2Min);
 
@@ -623,8 +632,8 @@ void controlTemperature() {
   int s2Closed = g_config.servo2Min;
   int s2Open   = g_config.servo2Max;
 
-  int targetS1 = g_actuators.servo1Pos;
-  int targetS2 = g_actuators.servo2Pos;
+  int targetS1 = (g_actuators.servo1Pos < 0) ? s1Closed : g_actuators.servo1Pos;
+  int targetS2 = (g_actuators.servo2Pos < 0) ? s2Closed : g_actuators.servo2Pos;
 
   if (t > g_config.tempThresh2) {
     targetS1 = s1Open;
@@ -734,14 +743,46 @@ void managePumpTimeout(unsigned long now) {
 // IMPLEMENTACIÓN: SERVOS PCA9685
 // ═══════════════════════════════════════════════════════════════════════════════
 
+bool ensurePCA9685() {
+  Wire.setClock(100000);
+  Wire.beginTransmission(PCA9685_ADDR);
+  if (Wire.endTransmission() != 0) {
+    g_pcaOk = false;
+    return false;
+  }
+  uint8_t prescale = pca.readPrescale();
+  // Si el PCA9685 no estaba iniciado o perdió su configuración por caída de 5V (prescale por defecto = 30)
+  if (!g_pcaOk || prescale < 100) {
+    if (pca.begin()) {
+      pca.setOscillatorFrequency(27000000);
+      pca.setPWMFreq(50);
+      pca.wakeup();
+      g_pcaOk = true;
+      Serial.println(F("[PCA9685] Driver I2C (0x40) activo y configurado a 50Hz"));
+    } else {
+      g_pcaOk = false;
+      return false;
+    }
+  } else {
+    pca.wakeup();
+  }
+  return true;
+}
+
 void setServoAngle(uint8_t channel, int angle) {
-  if (!g_pcaOk) {
-    Serial.println(F("[SERVO] Ignorado: PCA9685 no disponible"));
+  if (!ensurePCA9685()) {
+    Serial.println(F("[SERVO] ERROR: PCA9685 (0x40) no responde en I2C (revisar SDA=4, SCL=15, VCC, V+)"));
     return;
   }
   int clamped = constrain(angle, 0, 180);
   uint16_t pulse = map(clamped, 0, 180, SERVO_PULSE_MIN, SERVO_PULSE_MAX);
-  pca.setPWM(channel, 0, pulse);
+  if (pca.setPWM(channel, 0, pulse) != 0) {
+    // Reintentar una vez si hubo colisión en el bus I2C
+    g_pcaOk = false;
+    if (ensurePCA9685()) {
+      pca.setPWM(channel, 0, pulse);
+    }
+  }
   
   Serial.print(F("[SERVO] Canal ")); Serial.print(channel);
   Serial.print(F(" -> ")); Serial.print(clamped);
@@ -778,6 +819,7 @@ void transmitTelemetry() {
   payload += "PUMP:" + String(g_actuators.pumpOn ? 1 : 0) + "|";
   payload += "MODE:" + String(g_mode == MODE_AUTO ? "AUTO" : g_mode == MODE_MANUAL ? "MANUAL" : "SLEEP") + "|";
   payload += "RSSI:" + String(g_telemetry.lastRSSI) + "|";
+  payload += "PCA:" + String(g_pcaOk ? 1 : 0) + "|";
   payload += "CNT:" + String(g_telemetry.packetCounter);
   
   // Incluir ACK de último comando si existe
@@ -846,8 +888,8 @@ void processCommand(const String& cmd) {
 
   g_lastCommand = act + ":" + valStr;
   
-  if (act == "S1" || act == "S2") {
-    // Activar override manual temporal por 10 minutos para compuertas
+  if (act != "MODE") {
+    // Activar override manual temporal por 10 minutos para comandos de actuadores
     g_manualOverrideUntil = millis() + MANUAL_OVERRIDE_MS;
     g_mode = MODE_MANUAL;
   }
@@ -892,6 +934,9 @@ void processCommand(const String& cmd) {
       if (g_actuators.pumpOn && !g_actuators.pumpAuto) {
         activatePump(false, false);
       }
+      // Forzar actualización física inmediata de los servos según la temperatura actual
+      g_actuators.servo1Pos = -1;
+      g_actuators.servo2Pos = -1;
       runControlLogic();
     } else if (valStr == "MANUAL") {
       g_mode = MODE_MANUAL;
@@ -997,7 +1042,7 @@ void printHelpMenu() {
   Serial.println(F("║  'auto'             -> Activa modo autónomo (riego automático)   ║"));
   Serial.println(F("║  'manual'           -> Activa modo manual (riego pausado)        ║"));
   Serial.println(F("║  'bomba on'/'off'   -> Prueba encendido manual de la bomba       ║"));
-  Serial.println(F("║  'bomba test'       -> Prueba relé 1.5s ignorando sensor agua    ║"));
+  Serial.println(F("║  'bomba test'       -> Prueba relé 1.0s ignorando sensor agua    ║"));
   Serial.println(F("║  'relax'            -> Libera PWM de servos (detiene pitido)     ║"));
   Serial.println(F("║  'abrir' / 'cerrar' -> Prueba compuertas abiertas / cerradas     ║"));
   Serial.println(F("║  's1 90' / 's2 0'   -> Mueve un servo a cualquier ángulo (0-180) ║"));
@@ -1057,6 +1102,9 @@ void handleSerialConsole() {
   } else if (cmd == "auto") {
     g_mode = MODE_AUTO;
     g_manualOverrideUntil = 0;
+    g_actuators.servo1Pos = -1;
+    g_actuators.servo2Pos = -1;
+    runControlLogic();
     Serial.println(F("🤖 [MODO] Cambiado a AUTO (Riego automático activado)"));
     printCalibrationStatus();
 
@@ -1067,9 +1115,9 @@ void handleSerialConsole() {
     printCalibrationStatus();
 
   } else if (cmd == "bomba test") {
-    Serial.println(F("⚡ [TEST] Activando relé bomba directamente por 1.5s (sin filtro agua)..."));
+    Serial.println(F("⚡ [TEST] Activando relé bomba directamente por 1.0s (sin filtro agua)..."));
     digitalWrite(PIN_RELE, HIGH);
-    delay(1500);
+    delay(1000);
     digitalWrite(PIN_RELE, LOW);
     Serial.println(F("⚡ [TEST] Relé bomba apagado."));
 
@@ -1311,6 +1359,7 @@ void updateDisplay() {
   display.print(g_actuators.servo1Pos);
   display.print(F(" V2:"));
   display.print(g_actuators.servo2Pos);
+  display.print(g_pcaOk ? F(" PCA:OK") : F(" PCA:ERR"));
 
   display.setCursor(0, 46);
   display.print(F("BOMBA:"));

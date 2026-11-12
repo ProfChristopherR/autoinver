@@ -743,14 +743,14 @@
               <span id="pumpManualHint" style="display:none; font-size:0.75rem; color:#f59e0b; font-weight:600;">Manual</span>
             </div>
             <div class="control-row">
-              <button class="btn btn-primary" id="btnPumpOn" onclick="triggerManualPump('1')">Encender (1.5s)</button>
+              <button class="btn btn-primary" id="btnPumpOn" onclick="triggerManualPump('1')">Encender (1s)</button>
               <button class="btn btn-danger" id="btnPumpOff" onclick="triggerManualPump('0')">Apagar</button>
             </div>
             <div id="pumpWaterWarning" style="display:none; margin-top:10px; padding:6px 10px; border-radius:6px; background:rgba(239,68,68,0.14); border:1px solid rgba(239,68,68,0.3); color:#fca5a5; font-size:0.74rem;">
               🚨 Nivel de agua &lt; 10%: el nodo bloquea el encendido para proteger la bomba.
             </div>
             <div style="margin-top:12px; font-size:0.75rem; color:var(--text-muted);">
-              En manual emite un pulso controlado de riego de 1.5 segundos.
+              En manual emite un pulso controlado de riego de 1 segundo.
             </div>
           </div>
           <div class="control-group">
@@ -1555,7 +1555,7 @@
       setModeUI('MANUAL');
       sendCommand('BOMBA', state);
       if (state === '1') {
-        showToast('💧 Bomba activada en modo manual (1.5s)', 'info');
+        showToast('💧 Bomba activada en modo manual (1s)', 'info');
       }
     }
 
