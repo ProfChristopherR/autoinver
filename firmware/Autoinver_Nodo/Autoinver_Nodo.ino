@@ -245,10 +245,7 @@ void loop() {
   // ── 3. Gestión timeout bomba (fin de pulso y cortes de seguridad) ──
   managePumpTimeout(now);
 
-  // ── 3b. Auto-relajación de servos tras 1.2s sin movimiento (evita zumbido y caída de 5V) ──
-  if (g_servosHolding && (now - g_lastServoMoveMs >= 1200)) {
-    releaseServos();
-  }
+  // Servos mantienen su PWM continuo generado por el PCA9685 para sostener posición
 
   // ── 4. Escucha prioritaria de comandos del gateway por LoRa ──
   listenForCommands();
@@ -626,8 +623,8 @@ void controlTemperature() {
   int s2Closed = g_config.servo2Min;
   int s2Open   = g_config.servo2Max;
 
-  int targetS1 = s1Closed;
-  int targetS2 = s2Closed;
+  int targetS1 = g_actuators.servo1Pos;
+  int targetS2 = g_actuators.servo2Pos;
 
   if (t > g_config.tempThresh2) {
     targetS1 = s1Open;
@@ -684,10 +681,7 @@ void activatePump(bool on, bool automatic) {
     return;
   }
 
-  // Liberar PWM de servos antes de encender el relé para evitar caída de tensión en 5V
-  if (on && g_servosHolding) {
-    releaseServos();
-  }
+
 
   g_actuators.pumpOn = on;
   g_actuators.pumpAuto = automatic;
@@ -731,7 +725,7 @@ void managePumpTimeout(unsigned long now) {
       Serial.print(PUMP_COOLDOWN_MS / 1000);
       Serial.println(F("s)..."));
     } else {
-      Serial.println(F("Fin de pulso manual (4.0s)."));
+      Serial.println(F("Fin de pulso manual (1.0s)."));
     }
   }
 }
@@ -748,20 +742,19 @@ void setServoAngle(uint8_t channel, int angle) {
   int clamped = constrain(angle, 0, 180);
   uint16_t pulse = map(clamped, 0, 180, SERVO_PULSE_MIN, SERVO_PULSE_MAX);
   pca.setPWM(channel, 0, pulse);
-  g_lastServoMoveMs = millis();
-  g_servosHolding   = true;
   
   Serial.print(F("[SERVO] Canal ")); Serial.print(channel);
   Serial.print(F(" -> ")); Serial.print(clamped);
-  Serial.println(F("°"));
+  Serial.print(F("° (pulso PCA9685: ")); Serial.print(pulse);
+  Serial.println(F(")"));
 }
 
 void releaseServos() {
-  g_servosHolding = false;
   if (!g_pcaOk) return;
-  pca.setPWM(CHANNEL_SERVO_A, 0, 0);
-  pca.setPWM(CHANNEL_SERVO_B, 0, 0);
-  Serial.println(F("[SERVO] PWM liberado en ambos canales (sin torque/zumbido)"));
+  // pca.setPin(ch, 0) escribe setPWM(ch, 0, 4096) -> 0V LOW real, seguro sin pulsos
+  pca.setPin(CHANNEL_SERVO_A, 0);
+  pca.setPin(CHANNEL_SERVO_B, 0);
+  Serial.println(F("[SERVO] PWM apagado en ambos canales (0V)"));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -853,8 +846,8 @@ void processCommand(const String& cmd) {
 
   g_lastCommand = act + ":" + valStr;
   
-  if (act != "MODE") {
-    // Activar override manual temporal por 10 minutos para comandos de actuadores
+  if (act == "S1" || act == "S2") {
+    // Activar override manual temporal por 10 minutos para compuertas
     g_manualOverrideUntil = millis() + MANUAL_OVERRIDE_MS;
     g_mode = MODE_MANUAL;
   }

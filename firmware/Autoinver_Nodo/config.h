@@ -78,7 +78,7 @@
 
 // ── Control de Riego por Pulsos (Invernadero pequeño) ──
 #define PUMP_PULSE_MS        1000   // TIEMPO ENCENDIDA (AUTO): 1 segundo de agua por pulso
-#define PUMP_MANUAL_PULSE_MS 4000   // TIEMPO ENCENDIDA (MANUAL): 4 segundos al activar desde Dashboard
+#define PUMP_MANUAL_PULSE_MS 1000   // TIEMPO ENCENDIDA (MANUAL): 1 segundo exacto (pedido usuario)
 #define PUMP_COOLDOWN_MS     2000   // TIEMPO APAGADA:   2 segundos de pausa/absorción entre pulsos
 
 // ═══════════════════════════════════════════════════════════════════════════════
