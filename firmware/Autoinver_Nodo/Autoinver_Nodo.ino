@@ -23,7 +23,7 @@
 // OBJETOS GLOBALES
 // ═══════════════════════════════════════════════════════════════════════════════
 DHT dht(PIN_DHT, DHT_TYPE);
-Adafruit_SSD1306 display(SCREEN_W, SCREEN_H, &Wire, PIN_OLED_RST, 100000UL, 100000UL);
+Adafruit_SSD1306 display(SCREEN_W, SCREEN_H, &Wire, PIN_OLED_RST);
 ESP32Time rtc(GMT_OFFSET_SEC);
 // PCA9685 comparte el bus I2C del OLED (Wire, pines 4/15).
 // En Heltec LoRa32 V2 el GPIO21 controla Vext, no se puede usar como SDA.
@@ -171,7 +171,6 @@ void showErrorScreen(const char* msg);
 // Utilidades
 String getTimestampStr();
 void waitListeningLoRa(unsigned long ms);
-bool ensurePCA9685();
 void setServoAngle(uint8_t channel, int angle);
 void releaseServos();
 void handleWatchdog();
@@ -292,11 +291,6 @@ void loop() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void initDisplay() {
-  // En Heltec WiFi LoRa 32 V2, GPIO21 controla Vext (LOW = encender 3.3V de periféricos y pull-ups I2C)
-  pinMode(21, OUTPUT);
-  digitalWrite(21, LOW);
-  delay(20);
-
   pinMode(PIN_OLED_RST, OUTPUT);
   digitalWrite(PIN_OLED_RST, LOW);
   delay(50);
@@ -304,7 +298,6 @@ void initDisplay() {
   delay(50);
 
   Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
-  Wire.setClock(100000);
   
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println(F("[ERR] OLED init failed"));
@@ -374,18 +367,19 @@ void initActuators() {
     Serial.println(F("[I2C] NINGUN dispositivo encontrado -> revisar cableado SDA/SCL/VCC"));
   }
 
-  if (!ensurePCA9685()) {
-    Serial.println(F("[ERR] PCA9685 no detectado en I2C (bus pines 4/15). Reintentará automáticamente."));
+  if (!pca.begin()) {
+    Serial.println(F("[ERR] PCA9685 no detectado en I2C (bus pines 4/15). Servos deshabilitados."));
+    g_pcaOk = false;
   } else {
-    // Barrido corto de verificación al arranque (0° -> 45° -> 0°) para confirmar movimiento físico
-    Serial.println(F("[SERVO] Prueba de arranque en canales 0 y 1 (0° -> 45° -> 0°)..."));
+    pca.setOscillatorFrequency(27000000);
+    pca.setPWMFreq(50);  // 50Hz estándar para servos
+    delay(10);
+    g_pcaOk = true;
+    Serial.println(F("[OK] PCA9685 (0x40) detectado en I2C @ 50Hz"));
+
+    // Posicionar compuertas en su ángulo mínimo calibrado (cerradas) al iniciar
     setServoAngle(CHANNEL_SERVO_A, g_config.servo1Min);
-    setServoAngle(CHANNEL_SERVO_B, g_config.servo2Min);
-    delay(400);
-    setServoAngle(CHANNEL_SERVO_A, 45);
-    setServoAngle(CHANNEL_SERVO_B, 45);
-    delay(500);
-    setServoAngle(CHANNEL_SERVO_A, g_config.servo1Min);
+    delay(150);
     setServoAngle(CHANNEL_SERVO_B, g_config.servo2Min);
 
     g_actuators.servo1Pos = g_config.servo1Min;
@@ -743,46 +737,22 @@ void managePumpTimeout(unsigned long now) {
 // IMPLEMENTACIÓN: SERVOS PCA9685
 // ═══════════════════════════════════════════════════════════════════════════════
 
-bool ensurePCA9685() {
-  Wire.setClock(100000);
-  Wire.beginTransmission(PCA9685_ADDR);
-  if (Wire.endTransmission() != 0) {
-    g_pcaOk = false;
-    return false;
-  }
-  uint8_t prescale = pca.readPrescale();
-  // Si el PCA9685 no estaba iniciado o perdió su configuración por caída de 5V (prescale por defecto = 30)
-  if (!g_pcaOk || prescale < 100) {
+void setServoAngle(uint8_t channel, int angle) {
+  if (!g_pcaOk) {
     if (pca.begin()) {
       pca.setOscillatorFrequency(27000000);
       pca.setPWMFreq(50);
-      pca.wakeup();
+      delay(10);
       g_pcaOk = true;
-      Serial.println(F("[PCA9685] Driver I2C (0x40) activo y configurado a 50Hz"));
+      Serial.println(F("[PCA9685] Reconectado en I2C @ 50Hz"));
     } else {
-      g_pcaOk = false;
-      return false;
+      Serial.println(F("[SERVO] Ignorado: PCA9685 no disponible"));
+      return;
     }
-  } else {
-    pca.wakeup();
-  }
-  return true;
-}
-
-void setServoAngle(uint8_t channel, int angle) {
-  if (!ensurePCA9685()) {
-    Serial.println(F("[SERVO] ERROR: PCA9685 (0x40) no responde en I2C (revisar SDA=4, SCL=15, VCC, V+)"));
-    return;
   }
   int clamped = constrain(angle, 0, 180);
   uint16_t pulse = map(clamped, 0, 180, SERVO_PULSE_MIN, SERVO_PULSE_MAX);
-  if (pca.setPWM(channel, 0, pulse) != 0) {
-    // Reintentar una vez si hubo colisión en el bus I2C
-    g_pcaOk = false;
-    if (ensurePCA9685()) {
-      pca.setPWM(channel, 0, pulse);
-    }
-  }
+  pca.setPWM(channel, 0, pulse);
   
   Serial.print(F("[SERVO] Canal ")); Serial.print(channel);
   Serial.print(F(" -> ")); Serial.print(clamped);
