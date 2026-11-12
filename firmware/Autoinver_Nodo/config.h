@@ -78,7 +78,7 @@
 
 // ── Control de Riego por Pulsos (Invernadero pequeño) ──
 #define PUMP_PULSE_MS        1000   // TIEMPO ENCENDIDA (AUTO): 1 segundo de agua por pulso
-#define PUMP_MANUAL_PULSE_MS 1500   // TIEMPO ENCENDIDA (MANUAL): 1.5 segundos en modo manual
+#define PUMP_MANUAL_PULSE_MS 4000   // TIEMPO ENCENDIDA (MANUAL): 4 segundos al activar desde Dashboard
 #define PUMP_COOLDOWN_MS     2000   // TIEMPO APAGADA:   2 segundos de pausa/absorción entre pulsos
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -94,7 +94,7 @@
 // ── Sensor Ultrasónico HC-SR04 (Nivel de Agua) ──
 #define HCSR04_FULL_CM_DEFAULT  3.0f    // <= 3.0 cm -> 100% (tanque lleno)
 #define HCSR04_EMPTY_CM_DEFAULT 10.0f   // >= 10.0 cm -> 0% (tanque vacío)
-#define HCSR04_TIMEOUT_US       12000UL // Timeout eco ~2m (evita bloquear LoRa)
+#define HCSR04_TIMEOUT_US       6000UL  // Timeout eco ~1m (máx 6ms por ping, no bloquea LoRa)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SERVOS

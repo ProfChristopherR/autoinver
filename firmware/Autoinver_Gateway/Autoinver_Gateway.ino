@@ -785,17 +785,35 @@ void enviarComandoLoRa(const String& act, const String& val) {
   String ts = getTimestampStr();
   String cmd = "CMD:AUTOINVER|ACT:" + act + "|VAL:" + val + "|TS:" + ts;
   
-  // Enviar 2 veces con breve pausa para evitar pérdida si el nodo está leyendo DHT22 o transmitiendo
-  for (int i = 0; i < 2; i++) {
+  // Enviar ráfaga de 4 paquetes espaciados por 80ms para garantizar recepción en el Nodo
+  for (int i = 0; i < 4; i++) {
     LoRa.beginPacket();
     LoRa.print(cmd);
     LoRa.endPacket();
-    if (i == 0) delay(150);
+    if (i < 3) {
+      unsigned long waitStart = millis();
+      while (millis() - waitStart < 80) {
+        if (LoRa.parsePacket()) {
+          procesarPaqueteLoRa();
+        }
+        delay(2);
+      }
+    }
   }
   
   g_totalTxCommands++;
-  Serial.print(F("[TX-CMD x2] "));
+  Serial.print(F("[TX-CMD x4] "));
   Serial.println(cmd);
+
+  // Escuchar durante 550ms la telemetría de confirmación (ACK) del Nodo antes de iniciar HTTPS
+  unsigned long ackWaitStart = millis();
+  while (millis() - ackWaitStart < 550) {
+    if (LoRa.parsePacket()) {
+      procesarPaqueteLoRa();
+      break;
+    }
+    delay(2);
+  }
 }
 
 void parsearTelemetria(const String& p) {

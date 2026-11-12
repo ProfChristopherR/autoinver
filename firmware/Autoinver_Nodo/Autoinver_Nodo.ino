@@ -95,15 +95,22 @@ bool          g_pcaOk       = false;  // PCA9685 detectado en I2C
 
 // Timestamps no-bloqueantes
 unsigned long g_lastSensorRead    = 0;
+unsigned long g_lastDhtRead       = 0;
 unsigned long g_lastTx            = 0;
 unsigned long g_lastDisplayUpd    = 0;
 unsigned long g_lastSyncAttempt   = 0;
 unsigned long g_manualOverrideUntil = 0;
 unsigned long g_lastPumpStopMs    = 0;
+unsigned long g_lastServoMoveMs   = 0;
+bool          g_servosHolding     = false;
 
-// Control de override manual
-String        g_lastCommand     = "NINGUNO";
-int           g_syncAttempts    = 0;
+// Control de override manual y deduplicación de ráfagas LoRa
+String        g_lastCommand       = "NINGUNO";
+String        g_lastRawCmd        = "";
+unsigned long g_lastRawCmdMs      = 0;
+bool          g_pendingImmediateTx = false;
+unsigned long g_pendingTxAtMs     = 0;
+int           g_syncAttempts      = 0;
 
 // Buffer suavizado para ADC suelo + contador de fallos HC-SR04
 static const int ADC_SAMPLES = 8;
@@ -163,6 +170,7 @@ void showErrorScreen(const char* msg);
 
 // Utilidades
 String getTimestampStr();
+void waitListeningLoRa(unsigned long ms);
 void setServoAngle(uint8_t channel, int angle);
 void releaseServos();
 void handleWatchdog();
@@ -234,10 +242,26 @@ void loop() {
     runControlLogic();
   }
 
-  // ── 3. Gestión timeout bomba (fin de pulso de 1s y cortes de seguridad) ──
+  // ── 3. Gestión timeout bomba (fin de pulso y cortes de seguridad) ──
   managePumpTimeout(now);
 
-  // ── 4. Transmisión LoRa cada TX_INTERVAL_MS ──
+  // ── 3b. Auto-relajación de servos tras 1.2s sin movimiento (evita zumbido y caída de 5V) ──
+  if (g_servosHolding && (now - g_lastServoMoveMs >= 1200)) {
+    releaseServos();
+  }
+
+  // ── 4. Escucha prioritaria de comandos del gateway por LoRa ──
+  listenForCommands();
+
+  // ── 4b. Telemetría inmediata diferida tras comando (evita colisión con ráfaga del Gateway) ──
+  now = millis();
+  if (g_pendingImmediateTx && now >= g_pendingTxAtMs) {
+    g_pendingImmediateTx = false;
+    g_lastTx = now;
+    transmitTelemetry();
+  }
+
+  // ── 4c. Transmisión LoRa periódica cada TX_INTERVAL_MS ──
   if (now - g_lastTx >= TX_INTERVAL_MS) {
     g_lastTx = now;
     transmitTelemetry();
@@ -248,16 +272,15 @@ void loop() {
     handleTimeSync(now);
   }
 
-  // ── 5. Escucha de comandos del gateway por LoRa ──
-  listenForCommands();
-
   // ── 5b. Escucha de comandos de calibración por Serial USB ──
+  listenForCommands();
   handleSerialConsole();
 
   // ── 6. Actualización OLED cada DISPLAY_INTERVAL_MS ──
   if (now - g_lastDisplayUpd >= DISPLAY_INTERVAL_MS) {
     g_lastDisplayUpd = now;
     updateDisplay();
+    listenForCommands();
   }
 
   // ── 7. Watchdog implícito (yield) ──
@@ -444,29 +467,38 @@ void saveCalibration() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void readAllSensors() {
-  // ── DHT22 ──
-  float t = dht.readTemperature();
-  float h = dht.readHumidity();
-  
-  if (!isnan(t) && !isnan(h)) {
-    g_sensors.temperature = t;
-    g_sensors.humidity    = h;
-    g_sensors.valid       = true;
-  } else {
-    Serial.println(F("[WARN] DHT22 lectura fallida"));
+  listenForCommands();
+
+  // ── DHT22 (lectura cada 3s para no bloquear la recepción LoRa) ──
+  unsigned long now = millis();
+  if (g_lastDhtRead == 0 || (now - g_lastDhtRead >= 3000)) {
+    g_lastDhtRead = now;
+    float t = dht.readTemperature();
+    listenForCommands();
+    float h = dht.readHumidity();
+    listenForCommands();
+
+    if (!isnan(t) && !isnan(h)) {
+      g_sensors.temperature = t;
+      g_sensors.humidity    = h;
+      g_sensors.valid       = true;
+    } else {
+      Serial.println(F("[WARN] DHT22 lectura fallida"));
+    }
   }
 
-  // ── Suelo: promedio de 5 muestras analógicas ──
+  // ── Suelo: promedio de 5 muestras analógicas escuchando LoRa entre muestras ──
   long soilSum = 0;
   for (int i = 0; i < 5; i++) {
     soilSum += analogRead(PIN_SOIL);
-    delay(4);
+    waitListeningLoRa(3);
   }
   g_sensors.soilADC = (int)(soilSum / 5);
   g_sensors.soilPct = adcToSoilPercent(g_sensors.soilADC);
 
   // ── Nivel de agua: Ultrasónico HC-SR04 con filtro de mediana ──
   float distCm = readUltrasonicDistanceCm();
+  listenForCommands();
   if (distCm >= 0.0f) {
     g_waterFailCount      = 0;
     g_sensors.waterDistCm = distCm;
@@ -502,6 +534,7 @@ float readUltrasonicDistanceCm() {
   int validCount = 0;
 
   for (int i = 0; i < NUM_PINGS; i++) {
+    listenForCommands();
     digitalWrite(PIN_HCSR04_TRIG, LOW);
     delayMicroseconds(2);
     digitalWrite(PIN_HCSR04_TRIG, HIGH);
@@ -512,7 +545,7 @@ float readUltrasonicDistanceCm() {
     if (duration >= 60 && duration <= HCSR04_TIMEOUT_US) {
       samples[validCount++] = (duration * 0.0343f) * 0.5f;
     }
-    if (i < NUM_PINGS - 1) delay(12); // Esperar disipación de ecos antes del siguiente ping
+    if (i < NUM_PINGS - 1) waitListeningLoRa(12); // Escuchar LoRa mientras se disipan ecos
   }
 
   if (validCount == 0) return -1.0f;
@@ -651,6 +684,11 @@ void activatePump(bool on, bool automatic) {
     return;
   }
 
+  // Liberar PWM de servos antes de encender el relé para evitar caída de tensión en 5V
+  if (on && g_servosHolding) {
+    releaseServos();
+  }
+
   g_actuators.pumpOn = on;
   g_actuators.pumpAuto = automatic;
   digitalWrite(PIN_RELE, on ? HIGH : LOW);
@@ -693,7 +731,7 @@ void managePumpTimeout(unsigned long now) {
       Serial.print(PUMP_COOLDOWN_MS / 1000);
       Serial.println(F("s)..."));
     } else {
-      Serial.println(F("Fin de pulso manual (1.5s)."));
+      Serial.println(F("Fin de pulso manual (4.0s)."));
     }
   }
 }
@@ -710,6 +748,8 @@ void setServoAngle(uint8_t channel, int angle) {
   int clamped = constrain(angle, 0, 180);
   uint16_t pulse = map(clamped, 0, 180, SERVO_PULSE_MIN, SERVO_PULSE_MAX);
   pca.setPWM(channel, 0, pulse);
+  g_lastServoMoveMs = millis();
+  g_servosHolding   = true;
   
   Serial.print(F("[SERVO] Canal ")); Serial.print(channel);
   Serial.print(F(" -> ")); Serial.print(clamped);
@@ -717,6 +757,7 @@ void setServoAngle(uint8_t channel, int angle) {
 }
 
 void releaseServos() {
+  g_servosHolding = false;
   if (!g_pcaOk) return;
   pca.setPWM(CHANNEL_SERVO_A, 0, 0);
   pca.setPWM(CHANNEL_SERVO_B, 0, 0);
@@ -779,6 +820,14 @@ void listenForCommands() {
 
   // ── Comando dirigido a este nodo ──
   if (rx.indexOf("CMD:AUTOINVER") >= 0) {
+    unsigned long now = millis();
+    // Deduplicar paquetes repetidos de la misma ráfaga del Gateway (ventana 1.2s)
+    if (rx == g_lastRawCmd && (now - g_lastRawCmdMs < 1200)) {
+      Serial.println(F("[RX-CMD] Copia de ráfaga ignorada (comando ya ejecutado)"));
+      return;
+    }
+    g_lastRawCmd   = rx;
+    g_lastRawCmdMs = now;
     Serial.print(F("[RX-CMD] ")); Serial.println(rx);
     processCommand(rx);
   }
@@ -810,7 +859,13 @@ void processCommand(const String& cmd) {
     g_mode = MODE_MANUAL;
   }
 
-  if (act == "BOMBA") {
+  // Programar telemetría de confirmación 320ms después para no chocar con la ráfaga del Gateway
+  auto scheduleAckTelemetry = []() {
+    g_pendingImmediateTx = true;
+    g_pendingTxAtMs      = millis() + 320;
+  };
+
+  if (act == "BOMBA" || act == "PUMP") {
     bool on = (valStr == "1");
     if (on && g_sensors.waterPct < WATER_MIN_PCT) {
       Serial.println(F("[CMD] BOMBA bloqueada por nivel de agua < 10%"));
@@ -819,7 +874,7 @@ void processCommand(const String& cmd) {
       activatePump(on, false);
       sendACK("BOMBA");
     }
-    transmitTelemetry();
+    scheduleAckTelemetry();
 
   } else if (act == "S1") {
     // Restringir al rango calibrado
@@ -827,14 +882,14 @@ void processCommand(const String& cmd) {
     setServoAngle(CHANNEL_SERVO_A, angle);
     g_actuators.servo1Pos = angle;
     sendACK("S1");
-    transmitTelemetry();
+    scheduleAckTelemetry();
 
   } else if (act == "S2") {
     int angle = constrain(valStr.toInt(), g_config.servo2Min, g_config.servo2Max);
     setServoAngle(CHANNEL_SERVO_B, angle);
     g_actuators.servo2Pos = angle;
     sendACK("S2");
-    transmitTelemetry();
+    scheduleAckTelemetry();
 
   } else if (act == "MODE") {
     if (valStr == "AUTO") {
@@ -854,7 +909,7 @@ void processCommand(const String& cmd) {
       Serial.println(F("[CMD] Modo cambiado a SLEEP"));
     }
     sendACK("MODE");
-    transmitTelemetry();
+    scheduleAckTelemetry();
 
   } else if (act == "CAL") {
     // Formato VAL: PARAMETRO:valor  (ej. S1MIN:5, SOILMAX:3900)
@@ -1342,6 +1397,16 @@ String getTimestampStr() {
   if (s < 10)  t += "0"; t += String(s);
   
   return t;
+}
+
+void waitListeningLoRa(unsigned long ms) {
+  unsigned long start = millis();
+  while (millis() - start < ms) {
+    listenForCommands();
+    managePumpTimeout(millis());
+    delay(1);
+  }
+  listenForCommands();
 }
 
 void logMessage(const char* level, const char* msg) {
