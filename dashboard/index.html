@@ -677,8 +677,11 @@
 
     <!-- Charts -->
     <div class="section">
-      <div class="section-header">
-        <h3 class="section-title"><span id="chartIconTitle">📈</span> Historial de Sensores</h3>
+      <div class="section-header" style="flex-wrap:wrap; gap:10px;">
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+          <h3 class="section-title"><span id="chartIconTitle">📈</span> Historial de Sensores</h3>
+          <span id="historyWindowBadge" style="display:none; font-size:0.75rem; padding:4px 10px; border-radius:20px; background:rgba(245,158,11,0.14); border:1px solid rgba(245,158,11,0.3); color:#fbbf24; font-weight:500;"></span>
+        </div>
         <div class="section-actions" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           <!-- Selector tipo de gráfico (pequeño en la esquina superior derecha) -->
           <div class="time-selector" id="chartTypeSelector">
@@ -833,12 +836,19 @@
     // CONFIGURACIÓN - COMPLETAR CON TUS CREDENCIALES SUPABASE
     // ═══════════════════════════════════════════════════════════════════════════════
     // Estas variables se reemplazan en build time por Vite desde .env (VITE_*).
-    // En el repo solo quedan placeholders; ver .env.example.
-    const SUPABASE_URL = '%VITE_SUPABASE_URL%';
-    const SUPABASE_KEY = '%VITE_SUPABASE_ANON_KEY%';
+    // Si se abre el HTML directamente sin Vite o sin .env, usa el fallback público del proyecto.
+    const RAW_SUPABASE_URL = '%VITE_SUPABASE_URL%';
+    const RAW_SUPABASE_KEY = '%VITE_SUPABASE_ANON_KEY%';
+    const SUPABASE_URL = RAW_SUPABASE_URL.includes('%VITE_')
+      ? 'https://xntyohpdmvsmxpcrgiik.supabase.co'
+      : RAW_SUPABASE_URL;
+    const SUPABASE_KEY = RAW_SUPABASE_KEY.includes('%VITE_')
+      ? 'sb_publishable_-Z1DkeBREbh9iVv8WYltrg_QjAq7QLu'
+      : RAW_SUPABASE_KEY;
     
     // URL del gateway local (fallback)
     const GATEWAY_URL = 'http://192.168.1.100';  // Actualizar con IP del gateway
+    const HISTORY_CACHE_KEY = 'autoinver_history_cache_v2';
 
     // ═══════════════════════════════════════════════════════════════════════════════
     // ESTADO GLOBAL
@@ -868,24 +878,18 @@
       loadCommandQueue();
       setInterval(loadCommandQueue, 10000);
 
-      // Verificar frescura de datos cada 5s: si no llega nada en 30s, no estamos "en vivo"
+      // Verificar frescura de datos cada 5s: si no llega nada en 45s, mostrar estado histórico
       setInterval(() => {
-        if (lastDataAt === 0) return;
-        const age = (Date.now() - lastDataAt) / 1000;
-        if (age > 30) {
-          updateConnectionStatus(false, `Sin datos (${Math.round(age)}s)`);
-        } else {
-          updateConnectionStatus(true, `En vivo (${Math.round(age)}s)`);
-        }
+        refreshConnectionState();
       }, 5000);
     });
 
     function initSupabase() {
       // La librería UMD de Supabase se carga como global 'supabase' (window.supabase);
       // el cliente lo guardamos en 'supaClient' para no chocar con ese global.
-      if (typeof window.supabase === 'undefined' || SUPABASE_URL.includes('%VITE_')) {
-        console.error('Supabase no configurado: librería no cargada o faltan VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY en el build');
-        updateConnectionStatus(false, 'Sin conexión');
+      if (typeof window.supabase === 'undefined' || !SUPABASE_URL || SUPABASE_URL.includes('%VITE_')) {
+        console.error('Supabase no configurado: librería no cargada o faltan credenciales');
+        updateConnectionStatus('offline', 'Sin conexión');
         return;
       }
       supaClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -898,8 +902,15 @@
           schema: 'public',
           table: 'autoinver_data'
         }, (payload) => {
-          lastDataAt = Date.now();
-          updateDashboard(payload.new);
+          const newRow = payload.new;
+          lastDataAt = newRow && newRow.created_at ? new Date(newRow.created_at).getTime() : Date.now();
+          updateDashboard(newRow);
+          if (newRow) {
+            lastChartData = [...lastChartData, newRow].slice(-2000);
+            updateChart(lastChartData);
+            updateHistoryWindowBadge(lastChartData);
+          }
+          refreshConnectionState();
         })
         .subscribe((status) => {
           console.log('Realtime status:', status);
@@ -1065,6 +1076,7 @@
               type: 'time',
               time: {
                 unit: timeUnit,
+                tooltipFormat: 'dd/MM/yyyy HH:mm:ss',
                 displayFormats: displayFormats
               },
               grid: { display: false }
@@ -1113,39 +1125,173 @@
       });
     }
 
+    async function fetchHistoricalRange(sinceIso, untilIso) {
+      const pageSize = 1000;
+      const maxPages = timeRange === '7d' ? 3 : 2;
+      let allRows = [];
+
+      for (let page = 0; page < maxPages; page++) {
+        const fromIdx = page * pageSize;
+        const toIdx = fromIdx + pageSize - 1;
+        let query = supaClient
+          .from('autoinver_data')
+          .select('*')
+          .gte('created_at', sinceIso)
+          .order('created_at', { ascending: false })
+          .range(fromIdx, toIdx);
+
+        if (untilIso) {
+          query = query.lte('created_at', untilIso);
+        }
+
+        const { data: batch, error } = await query;
+        if (error) throw error;
+        if (!batch || batch.length === 0) break;
+
+        allRows = allRows.concat(batch);
+        if (batch.length < pageSize) break;
+      }
+
+      return allRows;
+    }
+
+    function saveHistoryCache(latest, historyList) {
+      try {
+        const payload = {
+          savedAt: Date.now(),
+          latest: latest,
+          history: (historyList || []).slice(-300)
+        };
+        localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(payload));
+      } catch (e) {
+        // Ignorar errores de cuota en localStorage
+      }
+    }
+
+    function loadHistoryCache() {
+      try {
+        const raw = localStorage.getItem(HISTORY_CACHE_KEY);
+        if (!raw) return null;
+        return JSON.parse(raw);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function updateHistoryWindowBadge(dataList) {
+      const badge = document.getElementById('historyWindowBadge');
+      if (!badge) return;
+
+      if (!dataList || dataList.length === 0 || !lastDataAt) {
+        badge.style.display = 'none';
+        return;
+      }
+
+      const ageSec = (Date.now() - lastDataAt) / 1000;
+      const lastDt = new Date(lastDataAt);
+      const lastFormatted = lastDt.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' }) + ' ' +
+                            lastDt.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+
+      badge.style.display = 'inline-flex';
+      if (ageSec <= 45) {
+        badge.style.background = 'rgba(16, 185, 129, 0.14)';
+        badge.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+        badge.style.color = '#34d399';
+        badge.textContent = `🟢 En vivo · ${dataList.length} registros`;
+      } else {
+        badge.style.background = 'rgba(245, 158, 11, 0.14)';
+        badge.style.borderColor = 'rgba(245, 158, 11, 0.3)';
+        badge.style.color = '#fbbf24';
+        badge.textContent = `🕒 Historial hasta ${lastFormatted} (${dataList.length} reg.)`;
+      }
+    }
+
     async function refreshData() {
       if (!supaClient) {
-        // Fallback: intentar desde gateway local
-        tryFetchFromGateway();
+        // Fallback: intentar desde gateway local o caché local
+        const gwOk = await tryFetchFromGateway();
+        if (!gwOk) {
+          const cached = loadHistoryCache();
+          if (cached && cached.latest) {
+            lastDataAt = new Date(cached.latest.created_at || cached.savedAt).getTime();
+            updateDashboard(cached.latest);
+            if (cached.history && cached.history.length > 0) {
+              updateChart(cached.history);
+              updateHistoryWindowBadge(cached.history);
+            }
+            refreshConnectionState();
+          }
+        }
         return;
       }
 
       try {
-        const since = getTimeRangeDate();
-        
-        const { data: rawData, error } = await supaClient
+        // 1. Obtener siempre el último registro disponible en Supabase
+        //    para que las tarjetas y la referencia temporal funcionen aunque el Autoinver esté desconectado.
+        const { data: latestRows, error: latestError } = await supaClient
           .from('autoinver_data')
           .select('*')
-          .gte('created_at', since.toISOString())
           .order('created_at', { ascending: false })
-          .limit(2000);
+          .limit(1);
 
-        if (error) throw error;
+        if (latestError) throw latestError;
 
-        const data = rawData ? rawData.slice().reverse() : [];
-
-        if (data.length > 0) {
-          const latest = data[data.length - 1];
-          lastDataAt = new Date(latest.created_at).getTime();
-          updateDashboard(latest);
-          updateChart(data);
-          updateConnectionStatus(true, 'Conectado');
-        } else {
-          updateConnectionStatus(false, 'Sin datos recientes');
+        if (!latestRows || latestRows.length === 0) {
+          updateConnectionStatus('offline', 'Sin datos registrados');
+          return;
         }
+
+        const latest = latestRows[0];
+        const latestTimeMs = new Date(latest.created_at).getTime();
+        lastDataAt = latestTimeMs;
+
+        // Actualizar siempre las tarjetas con el último estado conocido
+        updateDashboard(latest);
+
+        // 2. Anclar la ventana de tiempo (1h, 6h, 24h, 7d):
+        //    - Si el Autoinver está transmitiendo en vivo (< 60s), usar la hora actual.
+        //    - Si el Autoinver está desconectado, anclar el rango respecto al último dato registrado
+        //      para que siempre se visualice el historial de 1h, 6h, 24h o 7d previo a la desconexión.
+        const isLive = (Date.now() - latestTimeMs) <= 60000;
+        const anchorMs = isLive ? Date.now() : latestTimeMs;
+        const since = getTimeRangeDate(anchorMs);
+        const untilIso = isLive ? null : new Date(latestTimeMs + 1000).toISOString();
+
+        let rawData = await fetchHistoricalRange(since.toISOString(), untilIso);
+
+        // 3. Si en esa ventana hubiera menos de 2 registros (ej. un paquete aislado tras horas apagado),
+        //    traer los últimos 100 registros históricos para que el gráfico nunca quede vacío.
+        if (!rawData || rawData.length < 2) {
+          const { data: fallbackRows, error: fbError } = await supaClient
+            .from('autoinver_data')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(100);
+          if (!fbError && fallbackRows && fallbackRows.length > 0) {
+            rawData = fallbackRows;
+          }
+        }
+
+        const data = rawData ? rawData.slice().reverse() : [latest];
+
+        updateChart(data);
+        updateHistoryWindowBadge(data);
+        saveHistoryCache(latest, data);
+        refreshConnectionState();
       } catch (err) {
         console.error('Error fetching data:', err);
-        updateConnectionStatus(false, 'Error de conexión');
+        const cached = loadHistoryCache();
+        if (cached && cached.latest) {
+          lastDataAt = new Date(cached.latest.created_at || cached.savedAt).getTime();
+          updateDashboard(cached.latest);
+          if (cached.history && cached.history.length > 0) {
+            updateChart(cached.history);
+            updateHistoryWindowBadge(cached.history);
+          }
+          updateConnectionStatus('warning', 'Caché local (sin red)');
+        } else {
+          updateConnectionStatus('offline', 'Error de conexión');
+        }
       }
     }
 
@@ -1158,30 +1304,31 @@
             updateDashboard({
               temp_c: data.temp_c,
               hum_pct: data.hum_pct,
-              soil_pct: data.soil,
-              water_pct: data.water,
+              soil_pct: data.soil_pct ?? data.soil,
+              water_pct: data.water_pct ?? data.water,
               pump_state: data.pump,
               servo1_pos: data.servo1,
               servo2_pos: data.servo2,
               rssi: data.rssi,
               mode: data.mode
             });
-            updateConnectionStatus(true, 'Gateway local');
+            updateConnectionStatus('online', 'Gateway local');
+            return true;
           }
         }
       } catch (e) {
         // Silencioso - no hay conexión
       }
+      return false;
     }
 
-    function getTimeRangeDate() {
-      const now = new Date();
+    function getTimeRangeDate(referenceMs = Date.now()) {
       switch(timeRange) {
-        case '1h': return new Date(now - 60 * 60 * 1000);
-        case '6h': return new Date(now - 6 * 60 * 60 * 1000);
-        case '24h': return new Date(now - 24 * 60 * 60 * 1000);
-        case '7d': return new Date(now - 7 * 24 * 60 * 60 * 1000);
-        default: return new Date(now - 60 * 60 * 1000);
+        case '1h': return new Date(referenceMs - 60 * 60 * 1000);
+        case '6h': return new Date(referenceMs - 6 * 60 * 60 * 1000);
+        case '24h': return new Date(referenceMs - 24 * 60 * 60 * 1000);
+        case '7d': return new Date(referenceMs - 7 * 24 * 60 * 60 * 1000);
+        default: return new Date(referenceMs - 60 * 60 * 1000);
       }
     }
 
@@ -1620,12 +1767,39 @@
     // ═══════════════════════════════════════════════════════════════════════════════
     // UTILIDADES
     // ═══════════════════════════════════════════════════════════════════════════════
-    function updateConnectionStatus(connected, text) {
+    function formatElapsedAge(ageSec) {
+      const s = Math.max(0, Math.round(ageSec));
+      if (s < 60) return `${s}s`;
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m}m ${s % 60}s`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h}h ${m % 60}m`;
+      const d = Math.floor(h / 24);
+      return `${d}d ${h % 24}h`;
+    }
+
+    function refreshConnectionState() {
+      if (lastDataAt === 0) return;
+      const ageSec = (Date.now() - lastDataAt) / 1000;
+      if (ageSec <= 45) {
+        updateConnectionStatus('online', `En vivo (${formatElapsedAge(ageSec)})`);
+      } else {
+        updateConnectionStatus('warning', `Desconectado · Últ. dato hace ${formatElapsedAge(ageSec)}`);
+      }
+    }
+
+    function updateConnectionStatus(state, text) {
       const dot = document.getElementById('connDot');
       const txt = document.getElementById('connText');
       
-      isConnected = connected;
-      dot.className = 'pulse-dot' + (connected ? '' : ' offline');
+      isConnected = (state === true || state === 'online');
+      if (state === true || state === 'online') {
+        dot.className = 'pulse-dot';
+      } else if (state === 'warning' || state === 'history') {
+        dot.className = 'pulse-dot warning';
+      } else {
+        dot.className = 'pulse-dot offline';
+      }
       txt.textContent = text;
     }
 
